@@ -5126,6 +5126,7 @@ const toolSettings = __m_ui_annotate_tools.toolSettings;
 const openFormsDialog = __m_ui_formsdialog.openFormsDialog;
 const openSidecarMenu = __m_ui_sidecar_menu.openSidecarMenu;
 const openOcrMenu = __m_ui_ocr_menu.openOcrMenu;
+const hasFSA = __m_core_storage.hasFSA;
 
 let bar = null;
 const need = [];   // buttons needing a document
@@ -5186,9 +5187,10 @@ function render(version) {
 
     el('div.group', {}, [
       btn('open', 'Open', openPdf),
-      btn('openfolder', '', openFolder, { title: 'Open folder of PDFs' }),
+      // Folder mode needs File System Access — omit the button entirely on Firefox/Safari.
+      hasFSA ? btn('openfolder', '', openFolder, { title: 'Open folder of PDFs' }) : null,
       btn('new', '', newBlank, { id: 'btn-new' }),
-    ]),
+    ].filter(Boolean)),
     el('div.sep'),
     el('div.group', {}, [
       btn('save', 'Save', savePdf, { needsDoc: true }),
@@ -5414,7 +5416,8 @@ async function render() {
       el('button', { class: 'btn', onClick: newBlank }, [el('span', { html: icon('new') }), el('span.label', { text: 'New blank' })]),
     ].filter(Boolean)),
     el('div.privacy', { html: `${icon('moon')} <span>No account · no upload · no telemetry · works offline</span>`, style: 'justify-content:center;margin-top:4px' }),
-  ]);
+    hasFSA ? null : el('div', { text: 'Open-and-download mode — this browser lacks the File System Access API, so folder mode and save-in-place are unavailable. For the full experience use Chrome, Edge, Brave, or Arc.', style: 'font-size:12px;color:var(--warn);max-width:440px;margin:6px auto 0;line-height:1.5' }),
+  ].filter(Boolean));
   clear(welcome).append(drop);
   renderRecent();
 }

@@ -21,6 +21,7 @@ import { setTool, currentTool, toolSettings } from './annotate-tools.js';
 import { openFormsDialog } from './formsdialog.js';
 import { openSidecarMenu } from './sidecar-menu.js';
 import { openOcrMenu } from './ocr-menu.js';
+import { hasFSA } from '../core/storage.js';
 
 let bar = null;
 const need = [];   // buttons needing a document
@@ -81,9 +82,10 @@ function render(version) {
 
     el('div.group', {}, [
       btn('open', 'Open', openPdf),
-      btn('openfolder', '', openFolder, { title: 'Open folder of PDFs' }),
+      // Folder mode needs File System Access — omit the button entirely on Firefox/Safari.
+      hasFSA ? btn('openfolder', '', openFolder, { title: 'Open folder of PDFs' }) : null,
       btn('new', '', newBlank, { id: 'btn-new' }),
-    ]),
+    ].filter(Boolean)),
     el('div.sep'),
     el('div.group', {}, [
       btn('save', 'Save', savePdf, { needsDoc: true }),

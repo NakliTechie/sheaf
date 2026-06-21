@@ -41,7 +41,8 @@ async function render() {
       el('button', { class: 'btn', onClick: newBlank }, [el('span', { html: icon('new') }), el('span.label', { text: 'New blank' })]),
     ].filter(Boolean)),
     el('div.privacy', { html: `${icon('moon')} <span>No account · no upload · no telemetry · works offline</span>`, style: 'justify-content:center;margin-top:4px' }),
-  ]);
+    hasFSA ? null : el('div', { text: 'Open-and-download mode — this browser lacks the File System Access API, so folder mode and save-in-place are unavailable. For the full experience use Chrome, Edge, Brave, or Arc.', style: 'font-size:12px;color:var(--warn);max-width:440px;margin:6px auto 0;line-height:1.5' }),
+  ].filter(Boolean));
   clear(welcome).append(drop);
   renderRecent();
 }
