@@ -161,7 +161,12 @@ export function downloadBytes(bytes, name) {
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
-// ── OPFS crash-recovery staging (opt-in; wiped on clean close) ───────────────────
+// ── OPFS crash-recovery staging ──────────────────────────────────────────────────
+// SCAFFOLDING — defined as part of the storage façade but NOT wired in v1.0 (no caller
+// stages or recovers). When wired (a later milestone), this becomes the one place PDF
+// bytes touch disk, and only transiently: clearStage() MUST run on clean save/close so
+// the "no PDF content persisted" invariant holds. Until then, document bytes never
+// reach OPFS — they live only in memory.
 
 const STAGE_FILE = 'sheaf-working.pdf';
 const STAGE_META = 'sheaf-working.json';

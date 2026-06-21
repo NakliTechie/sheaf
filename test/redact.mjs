@@ -9,6 +9,7 @@ import { registerEngine } from '../src/core/engines.js';
 import { registerOps } from '../src/ops/index.js';
 import { dispatch } from '../src/core/runner.js';
 import { state } from '../src/core/state.js';
+import { tokenize, redactTokens } from '../src/ops/redact.js';
 
 let passed = 0, failed = 0;
 const ok = (n, c) => { c ? passed++ : failed++; console.log(`  ${c ? '✓' : '✗'} ${n}`); };
@@ -52,6 +53,25 @@ async function main() {
   ok('text outside the box survives', after.includes(hexOf('KEEP VISIBLE')) || after.includes(hexOf('KEEP')));
   ok('document still valid (1 page)', state.doc.pageCount() === 1);
   ok('reloadable after redaction', (await PDFDocument.load(await state.doc.toBytes())).getPageCount() === 1);
+
+  console.log('\nInline-image robustness (no desync; image bytes survive)');
+  // An inline image whose binary data contains "(Tj)" — a naive tokenizer would parse
+  // that as a string + operator and desync the text below it.
+  const imgData = '\x01\x02(Tj)\x03\x9f';
+  const stream =
+    `BT /F1 12 Tf 1 0 0 1 50 700 Tm <48656C6C6F> Tj ET\n` +            // "Hello" at y=700 (keep)
+    `q 100 0 0 100 50 480 cm BI /W 2 /H 2 /BPC 8 ID ${imgData} EI Q\n` + // inline image
+    `BT /F1 12 Tf 1 0 0 1 50 400 Tm <5365637265743132> Tj ET`;          // secret at y=400 (redact)
+  const box = { x0: 0, y0: 390, x1: 600, y1: 412 };
+  const { text: outStream, dirty } = redactTokens(tokenize(stream), [box]);
+  ok('redaction fired (dirty)', dirty === true);
+  ok('inline-image bytes survive verbatim', outStream.includes(imgData));
+  ok('text above the image untouched', outStream.includes('48656C6C6F'));
+  ok('targeted text below the image removed (no desync)', !outStream.includes('5365637265743132'));
+
+  console.log('\nDirty-stream optimization (no-match leaves stream intact)');
+  const clean = redactTokens(tokenize(stream), [{ x0: 0, y0: 0, x1: 1, y1: 1 }]); // box matches nothing
+  ok('no match → not dirty', clean.dirty === false);
 
   console.log('\nIngress');
   let threw = false; try { await dispatch('redact.region', { page: 9, x: 0, y: 0, w: 1, h: 0.1 }); } catch { threw = true; }

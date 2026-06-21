@@ -135,8 +135,14 @@ let html = template
 
 writeFileSync(join(ROOT, 'index.html'), html, 'utf8');
 
-// Deploy headers (static host). connect-src 'self' only while same-origin; the app
-// makes no outbound calls in v1.0 (no AI yet).
+// Deploy headers (static host). The ONLY egress the app code performs is the AI
+// sidecar's call to the user's own endpoint (BYOK https / localhost bridge); with no
+// AI configured it makes no outbound calls at all. connect-src includes a broad https:
+// because a static file cannot know the user's chosen provider host at build time — it
+// is the deliberate, load-bearing enabler for remote BYOK. The blast radius is bounded
+// by: SHA-256-pinned vendored engines (a swapped engine fails to load), no first-party
+// backend to talk to, and app code that only ever POSTs to the configured endpoint.
+// Local-only deployments can tighten connect-src to 'self' + localhost.
 writeFileSync(join(ROOT, '_headers'), `/*
   Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; worker-src 'self' blob:; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; frame-ancestors 'none'; object-src 'none'; base-uri 'self'
   X-Content-Type-Options: nosniff

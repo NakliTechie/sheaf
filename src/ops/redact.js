@@ -16,10 +16,11 @@ import { getEngine } from '../core/engines.js';
 function lib() { return getEngine('pdf-lib'); }
 
 // ── Content-stream tokenizer ────────────────────────────────────────────────────
+// tokenize + redactTokens are exported for direct testing (test/redact.mjs).
 const WS = new Set([' ', '\t', '\r', '\n', '\f', '\0']);
 const DELIM = new Set(['(', ')', '<', '>', '[', ']', '{', '}', '/', '%']);
 
-function tokenize(str) {
+export function tokenize(str) {
   const toks = [];
   let i = 0;
   const n = str.length;
@@ -46,8 +47,21 @@ function tokenize(str) {
     // number or operator (run of non-delimiter, non-ws)
     let j = i; while (j < n && !WS.has(str[j]) && !DELIM.has(str[j])) j++;
     const raw = str.slice(i, j); i = j;
-    if (/^[+-]?(\d+\.?\d*|\.\d+)$/.test(raw)) toks.push({ type: 'num', raw, value: parseFloat(raw) });
-    else toks.push({ type: 'op', raw });
+    if (/^[+-]?(\d+\.?\d*|\.\d+)$/.test(raw)) { toks.push({ type: 'num', raw, value: parseFloat(raw) }); continue; }
+    toks.push({ type: 'op', raw });
+    // Inline image: `BI … ID <raw bytes> EI`. The bytes between ID and EI are binary
+    // and must NOT be tokenized — otherwise a stray '(' or 'Tj' in the image data
+    // desyncs text-position tracking and redaction silently targets the wrong glyphs
+    // (or misses, while still drawing the reassuring black box). Capture verbatim.
+    if (raw === 'ID') {
+      let k = i;
+      while (k < n) {
+        if (WS.has(str[k]) && str[k + 1] === 'E' && str[k + 2] === 'I' && (k + 3 >= n || WS.has(str[k + 3]) || DELIM.has(str[k + 3]))) break;
+        k++;
+      }
+      toks.push({ type: 'raw', raw: str.slice(i, k) });
+      i = k;
+    }
   }
   return toks;
 }
@@ -62,10 +76,11 @@ function litLen(litRaw) { // approx glyph count of a (..) string
 
 // Walk tokens, track text position, and empty string tokens whose region overlaps any
 // box. Boxes are PDF-space rects {x0,y0,x1,y1}. Returns reconstructed stream text.
-function redactTokens(toks, boxes, defaultFontSize = 12) {
+export function redactTokens(toks, boxes, defaultFontSize = 12) {
   let tm = [1, 0, 0, 1, 0, 0];   // text matrix
   let lm = [1, 0, 0, 1, 0, 0];   // line matrix
   let fontSize = defaultFontSize, leading = 0;
+  let dirty = false;             // did any show-operator actually get emptied?
   const stack = [];
 
   const overlaps = (x, y, w, fs) => boxes.some(b =>
@@ -102,7 +117,7 @@ function redactTokens(toks, boxes, defaultFontSize = 12) {
       const tok = stack[stack.length - 1];
       if (!tok || tok.type !== 'str') return;
       const w = showWidth(tok);
-      if (overlaps(tm[4], tm[5], w, fontSize)) { tok.raw = tok.kind === 'hex' ? '<>' : '()'; }
+      if (overlaps(tm[4], tm[5], w, fontSize)) { tok.raw = tok.kind === 'hex' ? '<>' : '()'; dirty = true; }
       tm = [tm[0], tm[1], tm[2], tm[3], tm[4] + w, tm[5]];
     }
     function maybeRedactArray() {
@@ -111,12 +126,12 @@ function redactTokens(toks, boxes, defaultFontSize = 12) {
       let x = tm[4];
       for (const item of arr.items) {
         if (typeof item === 'number') { x -= (item / 1000) * fontSize; continue; }
-        if (item && item.type === 'str') { const w = showWidth(item); if (overlaps(x, tm[5], w, fontSize)) item.raw = item.kind === 'hex' ? '<>' : '()'; x += w; }
+        if (item && item.type === 'str') { const w = showWidth(item); if (overlaps(x, tm[5], w, fontSize)) { item.raw = item.kind === 'hex' ? '<>' : '()'; dirty = true; } x += w; }
       }
       tm = [tm[0], tm[1], tm[2], tm[3], x, tm[5]];
     }
   }
-  return reconstruct(toks);
+  return { text: reconstruct(toks), dirty };
 }
 
 function num(stack, fromEnd) { const v = stack[stack.length - fromEnd]; return typeof v === 'number' ? v : 0; }
@@ -160,9 +175,11 @@ export const ops = [
         let text;
         try { text = new TextDecoder('latin1').decode(decodePDFRawStream(stream).decode()); }
         catch { newRefs.push(ref); continue; } // can't decode — leave it; the box still covers it
-        const redacted = redactTokens(tokenize(text), [box]);
-        const newStream = ctx.flateStream(new TextEncoder().encode(redacted));
-        newRefs.push(ctx.register(newStream));
+        const { text: redacted, dirty } = redactTokens(tokenize(text), [box]);
+        // Only re-encode streams a redaction actually fired on. Untouched streams stay
+        // byte-for-byte intact (no whitespace re-flow, no risk to inline images, faster).
+        if (!dirty) { newRefs.push(ref); continue; }
+        newRefs.push(ctx.register(ctx.flateStream(new TextEncoder().encode(redacted))));
       }
       if (newRefs.length === 1) page.node.set(PDFName.of('Contents'), newRefs[0]);
       else if (newRefs.length) page.node.set(PDFName.of('Contents'), ctx.obj(newRefs));

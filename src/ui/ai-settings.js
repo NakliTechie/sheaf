@@ -21,7 +21,7 @@ export async function openAiSettings() {
 
     return el('div', { style: 'display:flex;flex-direction:column;gap:14px' }, [
       el('div', { style: 'font-size:13px;padding:8px 10px;border-radius:8px;background:var(--bg-sunken)' }, [
-        el('div', { html: `<b>Active:</b> ${s.tier === 'none' ? 'no model (AI features off)' : s.tier}` }),
+        el('div', {}, [el('b', { text: 'Active: ' }), el('span', { text: s.tier === 'none' ? 'no model (AI features off)' : s.tier })]),
         el('div', { text: describeLeakage(), style: 'color:var(--fg-muted);margin-top:4px;font-size:12px' }),
         s.local ? null : el('div', { text: 'Tip: run Ollama or LM Studio locally and it’s detected automatically — nothing leaves your machine.', style: 'color:var(--fg-faint);margin-top:4px;font-size:12px' }),
       ]),

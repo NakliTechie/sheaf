@@ -8,6 +8,7 @@
 
 import { getEngine } from '../core/engines.js';
 import { SheafDoc } from '../core/doc.js';
+import { validatePdfBytes } from '../core/schema.js';
 
 function lib() { return getEngine('pdf-lib'); }
 function norm360(a) { return ((a % 360) + 360) % 360; }
@@ -170,6 +171,7 @@ export const ops = [
     },
     async run(doc, { bytes, position }) {
       const { PDFDocument } = lib();
+      validatePdfBytes(bytes); // same %PDF ingress gate as open — agents can call this too
       const incoming = await PDFDocument.load(bytes, { ignoreEncryption: true });
       const indices = incoming.getPageIndices();
       const copied = await doc.pdf.copyPages(incoming, indices);

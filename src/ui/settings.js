@@ -16,7 +16,7 @@ export function openSettings() {
     settingRow('Theme', 'Dark or light. High-contrast dark is the default.',
       select(['dark', 'light'], document.documentElement.getAttribute('data-theme') || 'dark', (v) => {
         document.documentElement.setAttribute('data-theme', v); savePrefs();
-        const tb = document.getElementById('btn-theme'); if (tb) emit('toast', { message: '' }); // no-op; theme icon refreshes on next render
+        emit('theme:changed', { theme: v });
       })),
 
     settingRow('Default view', 'How pages stack in the viewport.',

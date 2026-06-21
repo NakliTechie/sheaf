@@ -499,8 +499,9 @@ const __m_core_state = (() => {
 //
 // One mutable `state` object the whole app reads. The open document is a SheafDoc
 // (or null). History is the op-log. Preferences persist to localStorage — and ONLY
-// preferences: never PDF content, page bytes, extracted text, or form values. Those
-// live in memory and, at most, in OPFS crash-staging (storage.js) — never here.
+// preferences: never PDF content, page bytes, extracted text, or form values. In v1.0
+// document bytes live only in memory (OPFS crash-staging is scaffolded but unwired —
+// see storage.js); they are never written here or to durable storage.
 
 const History = __m_core_history.History;
 const emit = __m_core_events.emit;
@@ -943,6 +944,7 @@ const __m_ops_pages = (() => {
 
 const getEngine = __m_core_engines.getEngine;
 const SheafDoc = __m_core_doc.SheafDoc;
+const validatePdfBytes = __m_core_schema.validatePdfBytes;
 
 function lib() { return getEngine('pdf-lib'); }
 function norm360(a) { return ((a % 360) + 360) % 360; }
@@ -1105,6 +1107,7 @@ const ops = [
     },
     async run(doc, { bytes, position }) {
       const { PDFDocument } = lib();
+      validatePdfBytes(bytes); // same %PDF ingress gate as open — agents can call this too
       const incoming = await PDFDocument.load(bytes, { ignoreEncryption: true });
       const indices = incoming.getPageIndices();
       const copied = await doc.pdf.copyPages(incoming, indices);
@@ -1677,6 +1680,7 @@ const getEngine = __m_core_engines.getEngine;
 function lib() { return getEngine('pdf-lib'); }
 
 // ── Content-stream tokenizer ────────────────────────────────────────────────────
+// tokenize + redactTokens are exported for direct testing (test/redact.mjs).
 const WS = new Set([' ', '\t', '\r', '\n', '\f', '\0']);
 const DELIM = new Set(['(', ')', '<', '>', '[', ']', '{', '}', '/', '%']);
 
@@ -1707,8 +1711,21 @@ function tokenize(str) {
     // number or operator (run of non-delimiter, non-ws)
     let j = i; while (j < n && !WS.has(str[j]) && !DELIM.has(str[j])) j++;
     const raw = str.slice(i, j); i = j;
-    if (/^[+-]?(\d+\.?\d*|\.\d+)$/.test(raw)) toks.push({ type: 'num', raw, value: parseFloat(raw) });
-    else toks.push({ type: 'op', raw });
+    if (/^[+-]?(\d+\.?\d*|\.\d+)$/.test(raw)) { toks.push({ type: 'num', raw, value: parseFloat(raw) }); continue; }
+    toks.push({ type: 'op', raw });
+    // Inline image: `BI … ID <raw bytes> EI`. The bytes between ID and EI are binary
+    // and must NOT be tokenized — otherwise a stray '(' or 'Tj' in the image data
+    // desyncs text-position tracking and redaction silently targets the wrong glyphs
+    // (or misses, while still drawing the reassuring black box). Capture verbatim.
+    if (raw === 'ID') {
+      let k = i;
+      while (k < n) {
+        if (WS.has(str[k]) && str[k + 1] === 'E' && str[k + 2] === 'I' && (k + 3 >= n || WS.has(str[k + 3]) || DELIM.has(str[k + 3]))) break;
+        k++;
+      }
+      toks.push({ type: 'raw', raw: str.slice(i, k) });
+      i = k;
+    }
   }
   return toks;
 }
@@ -1727,6 +1744,7 @@ function redactTokens(toks, boxes, defaultFontSize = 12) {
   let tm = [1, 0, 0, 1, 0, 0];   // text matrix
   let lm = [1, 0, 0, 1, 0, 0];   // line matrix
   let fontSize = defaultFontSize, leading = 0;
+  let dirty = false;             // did any show-operator actually get emptied?
   const stack = [];
 
   const overlaps = (x, y, w, fs) => boxes.some(b =>
@@ -1763,7 +1781,7 @@ function redactTokens(toks, boxes, defaultFontSize = 12) {
       const tok = stack[stack.length - 1];
       if (!tok || tok.type !== 'str') return;
       const w = showWidth(tok);
-      if (overlaps(tm[4], tm[5], w, fontSize)) { tok.raw = tok.kind === 'hex' ? '<>' : '()'; }
+      if (overlaps(tm[4], tm[5], w, fontSize)) { tok.raw = tok.kind === 'hex' ? '<>' : '()'; dirty = true; }
       tm = [tm[0], tm[1], tm[2], tm[3], tm[4] + w, tm[5]];
     }
     function maybeRedactArray() {
@@ -1772,12 +1790,12 @@ function redactTokens(toks, boxes, defaultFontSize = 12) {
       let x = tm[4];
       for (const item of arr.items) {
         if (typeof item === 'number') { x -= (item / 1000) * fontSize; continue; }
-        if (item && item.type === 'str') { const w = showWidth(item); if (overlaps(x, tm[5], w, fontSize)) item.raw = item.kind === 'hex' ? '<>' : '()'; x += w; }
+        if (item && item.type === 'str') { const w = showWidth(item); if (overlaps(x, tm[5], w, fontSize)) { item.raw = item.kind === 'hex' ? '<>' : '()'; dirty = true; } x += w; }
       }
       tm = [tm[0], tm[1], tm[2], tm[3], x, tm[5]];
     }
   }
-  return reconstruct(toks);
+  return { text: reconstruct(toks), dirty };
 }
 
 function num(stack, fromEnd) { const v = stack[stack.length - fromEnd]; return typeof v === 'number' ? v : 0; }
@@ -1821,9 +1839,11 @@ const ops = [
         let text;
         try { text = new TextDecoder('latin1').decode(decodePDFRawStream(stream).decode()); }
         catch { newRefs.push(ref); continue; } // can't decode — leave it; the box still covers it
-        const redacted = redactTokens(tokenize(text), [box]);
-        const newStream = ctx.flateStream(new TextEncoder().encode(redacted));
-        newRefs.push(ctx.register(newStream));
+        const { text: redacted, dirty } = redactTokens(tokenize(text), [box]);
+        // Only re-encode streams a redaction actually fired on. Untouched streams stay
+        // byte-for-byte intact (no whitespace re-flow, no risk to inline images, faster).
+        if (!dirty) { newRefs.push(ref); continue; }
+        newRefs.push(ctx.register(ctx.flateStream(new TextEncoder().encode(redacted))));
       }
       if (newRefs.length === 1) page.node.set(PDFName.of('Contents'), newRefs[0]);
       else if (newRefs.length) page.node.set(PDFName.of('Contents'), ctx.obj(newRefs));
@@ -1835,7 +1855,7 @@ const ops = [
   },
 ];
 
-return { ops };
+return { tokenize, redactTokens, ops };
 })();
 
 /* ops/sign.js */
@@ -2593,7 +2613,12 @@ function downloadBytes(bytes, name) {
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
-// ── OPFS crash-recovery staging (opt-in; wiped on clean close) ───────────────────
+// ── OPFS crash-recovery staging ──────────────────────────────────────────────────
+// SCAFFOLDING — defined as part of the storage façade but NOT wired in v1.0 (no caller
+// stages or recovers). When wired (a later milestone), this becomes the one place PDF
+// bytes touch disk, and only transiently: clearStage() MUST run on clean save/close so
+// the "no PDF content persisted" invariant holds. Until then, document bytes never
+// reach OPFS — they live only in memory.
 
 const STAGE_FILE = 'sheaf-working.pdf';
 const STAGE_META = 'sheaf-working.json';
@@ -3438,7 +3463,7 @@ function openSettings() {
     settingRow('Theme', 'Dark or light. High-contrast dark is the default.',
       select(['dark', 'light'], document.documentElement.getAttribute('data-theme') || 'dark', (v) => {
         document.documentElement.setAttribute('data-theme', v); savePrefs();
-        const tb = document.getElementById('btn-theme'); if (tb) emit('toast', { message: '' }); // no-op; theme icon refreshes on next render
+        emit('theme:changed', { theme: v });
       })),
 
     settingRow('Default view', 'How pages stack in the viewport.',
@@ -3928,7 +3953,7 @@ async function openAiSettings() {
 
     return el('div', { style: 'display:flex;flex-direction:column;gap:14px' }, [
       el('div', { style: 'font-size:13px;padding:8px 10px;border-radius:8px;background:var(--bg-sunken)' }, [
-        el('div', { html: `<b>Active:</b> ${s.tier === 'none' ? 'no model (AI features off)' : s.tier}` }),
+        el('div', {}, [el('b', { text: 'Active: ' }), el('span', { text: s.tier === 'none' ? 'no model (AI features off)' : s.tier })]),
         el('div', { text: describeLeakage(), style: 'color:var(--fg-muted);margin-top:4px;font-size:12px' }),
         s.local ? null : el('div', { text: 'Tip: run Ollama or LM Studio locally and it’s detected automatically — nothing leaves your machine.', style: 'color:var(--fg-faint);margin-top:4px;font-size:12px' }),
       ]),
@@ -4119,6 +4144,7 @@ function initToolbar() {
   on('history:changed', refresh);
   on('dirty:changed', refresh);
   on('tool:changed', ({ tool }) => reflectTool(tool));
+  on('theme:changed', ({ theme }) => { const tb = document.getElementById('btn-theme'); if (tb) tb.querySelector('span').innerHTML = icon(theme === 'light' ? 'moon' : 'sun'); });
   refresh();
 }
 

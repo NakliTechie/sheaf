@@ -58,6 +58,7 @@ export function initToolbar() {
   on('history:changed', refresh);
   on('dirty:changed', refresh);
   on('tool:changed', ({ tool }) => reflectTool(tool));
+  on('theme:changed', ({ theme }) => { const tb = document.getElementById('btn-theme'); if (tb) tb.querySelector('span').innerHTML = icon(theme === 'light' ? 'moon' : 'sun'); });
   refresh();
 }
 
