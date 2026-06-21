@@ -18,6 +18,7 @@ import { openMarksMenu } from './marksmenu.js';
 import { setTool, currentTool, toolSettings } from './annotate-tools.js';
 import { openFormsDialog } from './formsdialog.js';
 import { openSidecarMenu } from './sidecar-menu.js';
+import { openOcrMenu } from './ocr-menu.js';
 
 let bar = null;
 const need = [];   // buttons needing a document
@@ -99,6 +100,7 @@ function render(version) {
       btn('merge', '', mergePdf, { needsDoc: true }),
       btn('mark', '', openMarksMenu, { needsDoc: true }),
       btn('forms', '', openFormsDialog, { needsDoc: true }),
+      btn('ocr', '', openOcrMenu, { needsDoc: true }),
       btn('download', '', exportText, { needsDoc: true }),
       btn('info', '', onMetadata, { needsDoc: true }),
     ]),

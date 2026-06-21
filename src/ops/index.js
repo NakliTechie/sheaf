@@ -13,6 +13,7 @@ import { ops as textOps } from './text.js';
 import { ops as redactOps } from './redact.js';
 import { ops as signOps } from './sign.js';
 import { ops as convertOps } from './convert.js';
+import { ops as ocrOps } from './ocr.js';
 
 export function registerOps() {
   registerAll([
@@ -26,5 +27,6 @@ export function registerOps() {
     ...redactOps,
     ...signOps,
     ...convertOps,
+    ...ocrOps,
   ]);
 }

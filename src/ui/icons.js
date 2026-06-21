@@ -36,6 +36,7 @@ const P = {
   sign:    '<path d="M3 19c3 0 4-12 7-12s1 9 3 9 2-4 5-4"/><path d="M3 21h18"/>',
   download:'<path d="M12 3v12M7 11l5 5 5-5"/><path d="M5 21h14"/>',
   ai:      '<path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8z"/><path d="M18 14l.9 2.1L21 17l-2.1.9L18 20l-.9-2.1L15 17l2.1-.9z"/>',
+  ocr:     '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h4M7 13h7M15 8.5v3"/>',
 };
 
 export function icon(name) {

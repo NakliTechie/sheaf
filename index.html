@@ -10,7 +10,7 @@
        https endpoint they configure) and a local Ollama/LM Studio bridge. With no AI
        configured nothing connects anywhere; with a local model nothing leaves the
        machine. There is no first-party backend to talk to. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; worker-src 'self' blob:; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; frame-ancestors 'none'; object-src 'none'; base-uri 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; worker-src 'self' blob:; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; frame-ancestors 'none'; object-src 'none'; base-uri 'self'">
   <style>
 /* ui/theme.css */
 /* theme.css — design tokens (nakli-creative-primitives convention). Every colour,
@@ -309,6 +309,18 @@ const MANIFEST = {
       path: 'pdfjs/4.10.38/pdf.worker.min.mjs',
       sha256: '1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36',
     },
+  },
+  // Tesseract is loaded by core/ocr.js (multi-file: worker + embedded-wasm core + lang),
+  // not through loadEngine — recorded here as the integrity pin + version-of-record.
+  'tesseract': {
+    version: '5.1.1',
+    integrity: {
+      'tesseract.esm.min.js': '2537be686335e4b2637e933cdc85a52dd80267a592689c1bd63235c8591540ae',
+      'worker.min.js': 'aca1229639fc9907d86f96e825955a2b7c5716d17f3bc3acd71f9c7ab66181fc',
+      'tesseract-core-simd-lstm.wasm.js': 'ce20eda9533cbed1e6c2b4276fbae1e0adc61b6754b5513084be601787b457cf',
+      'eng.traineddata.gz': '18c1ac52b75e35d44735fb6c2a60acfaf23033524653200738e98f0243edb75b',
+    },
+    sizeHint: '6.6 MB',
   },
 };
 
@@ -2022,6 +2034,164 @@ const ops = [
 return { ops };
 })();
 
+/* core/ocr.js */
+const __m_core_ocr = (() => {
+// ocr.js — the OCR engine adapter (Tesseract.js v5, browser). Everything is vendored
+// same-origin under /engines/tesseract — the worker, the wasm core (embedded), and the
+// English model — so OCR runs with NO network fetch and NO CDN: it works offline, and
+// the "ask before any multi-MB download" rule is moot because nothing downloads. The
+// page image never leaves the machine; recognition is entirely local.
+
+const enginesBase = __m_core_engines.enginesBase;
+const emit = __m_core_events.emit;
+
+const VER = '5.1.1';
+// Integrity pin for the entry module (fetch → verify → import). The worker/core/lang
+// are loaded by Tesseract from the same-origin vendored paths (version-pinned).
+const ESM_SHA = '2537be686335e4b2637e933cdc85a52dd80267a592689c1bd63235c8591540ae';
+
+let _mod = null;       // tesseract.esm module
+let _worker = null;    // a live Tesseract worker (reused across pages)
+
+function dir() { return `${enginesBase()}/tesseract/${VER}`; }
+
+async function loadModule() {
+  if (_mod) return _mod;
+  const url = `${dir()}/tesseract.esm.min.js`;
+  const res = await fetch(url, { cache: 'force-cache' });
+  if (!res.ok) throw new Error(`OCR engine fetch failed: HTTP ${res.status}`);
+  const buf = await res.arrayBuffer();
+  const got = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))].map(b => b.toString(16).padStart(2, '0')).join('');
+  if (got !== ESM_SHA) throw new Error('OCR engine integrity check FAILED — refusing to load a tampered bundle.');
+  const imported = await import(/* @vite-ignore */ url);
+  _mod = imported.default || imported; // tesseract.js v5 ESM exports its API under default
+  return _mod;
+}
+
+// Spin up (and cache) a worker. onProgress receives Tesseract status messages
+// ({status, progress}) so the UI can show a real bar.
+async function getOcrWorker(onProgress) {
+  if (_worker) return _worker;
+  const { createWorker } = await loadModule();
+  const base = dir();
+  _worker = await createWorker('eng', 1, {
+    workerPath: `${base}/worker.min.js`,
+    corePath: `${base}/`,                 // dir; Tesseract appends tesseract-core-simd.wasm.js
+    langPath: `${base}/`,                 // dir; contains eng.traineddata.gz
+    workerBlobURL: false,                 // load worker from the path (CSP worker-src 'self')
+    logger: (m) => { if (m?.status) { emit('ocr:progress', m); onProgress?.(m); } },
+  });
+  return _worker;
+}
+
+// Recognize a canvas (or ImageData/HTMLImage). Returns Tesseract's data:
+// { text, words: [{ text, confidence, bbox:{x0,y0,x1,y1} }], ... }.
+async function recognizeCanvas(canvas, onProgress) {
+  const worker = await getOcrWorker(onProgress);
+  const { data } = await worker.recognize(canvas);
+  return data;
+}
+
+async function terminateOcr() { if (_worker) { try { await _worker.terminate(); } catch {} _worker = null; } }
+
+const ocrEngineVersion = VER;
+
+return { getOcrWorker, recognizeCanvas, terminateOcr, ocrEngineVersion };
+})();
+
+/* ops/ocr.js */
+const __m_ops_ocr = (() => {
+// ops/ocr.js — make scanned PDFs searchable. Renders each page to an image (PDF.js),
+// recognizes it locally (Tesseract, vendored), and lays an INVISIBLE text layer over
+// the image at the word positions. The page still looks identical; the text is now
+// selectable, searchable, and extractable. Browser-only (needs a canvas + the OCR
+// engine); not in the headless suite, but deterministic given the same input.
+
+const getEngine = __m_core_engines.getEngine;
+const openForRender = __m_core_render.openForRender;
+const recognizeCanvas = __m_core_ocr.recognizeCanvas;
+const winAnsiSafe = __m_ops_textsafe.winAnsiSafe;
+
+const SCALE = 2; // render resolution for OCR (higher = better recognition, slower)
+
+function resolveTargets(doc, pages) {
+  const count = doc.pageCount();
+  if (!pages || !pages.length) return [...Array(count).keys()];
+  for (const i of pages) if (i < 0 || i >= count) throw new Error(`Page ${i} out of range`);
+  return pages;
+}
+
+async function renderToCanvas(pdf, pageIndex, scale) {
+  const page = await pdf.getPage(pageIndex + 1);
+  const vp = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height);
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp, isEvalSupported: false }).promise;
+  return canvas;
+}
+
+// Lay invisible (opacity 0) text at each recognized word's position. The bbox is in
+// rendered-image pixels at SCALE; convert to PDF points (y flipped).
+function layInvisibleText(pdfPage, font, words, scale) {
+  const { rgb } = getEngine('pdf-lib');
+  const { height: Hpt } = pdfPage.getSize();
+  let placed = 0;
+  for (const w of words || []) {
+    const txt = w.text?.trim();
+    if (!txt || (w.confidence ?? 0) < 30) continue;
+    const { x0, y0, x1, y1 } = w.bbox || {};
+    if (x1 == null) continue;
+    const sizePt = Math.max(4, (y1 - y0) / scale);
+    pdfPage.drawText(winAnsiSafe(txt), { x: x0 / scale, y: Hpt - (y1 / scale), size: sizePt, font, color: rgb(0, 0, 0), opacity: 0 });
+    placed++;
+  }
+  return placed;
+}
+
+const ops = [
+  {
+    id: 'ocr.searchable', label: 'OCR — make searchable', group: 'ocr', icon: 'ocr',
+    description: 'Recognize text on scanned pages and add an invisible, selectable text layer (100% local). The page looks unchanged but becomes searchable.',
+    agentCallable: false, // heavy + browser-only (canvas + OCR engine)
+    params: { pages: { type: 'array', items: { type: 'int', min: 0 } } },
+    async run(doc, { pages }) {
+      const { StandardFonts } = getEngine('pdf-lib');
+      const font = await doc.pdf.embedFont(StandardFonts.Helvetica);
+      const pdf = await openForRender(await doc.toBytes());
+      try {
+        for (const i of resolveTargets(doc, pages)) {
+          const canvas = await renderToCanvas(pdf, i, SCALE);
+          const data = await recognizeCanvas(canvas);
+          layInvisibleText(doc.pdf.getPages()[i], font, data.words, SCALE);
+        }
+      } finally { pdf.destroy?.(); }
+      return { doc };
+    },
+  },
+
+  {
+    id: 'ocr.extract', label: 'OCR — extract text', group: 'ocr', icon: 'ocr',
+    description: 'Recognize and return the text of scanned pages as an artifact (does not change the document). 100% local.',
+    agentCallable: false, mutates: false,
+    params: { pages: { type: 'array', items: { type: 'int', min: 0 } } },
+    async run(doc, { pages }) {
+      const pdf = await openForRender(await doc.toBytes());
+      const out = [];
+      try {
+        for (const i of resolveTargets(doc, pages)) {
+          const canvas = await renderToCanvas(pdf, i, SCALE);
+          const data = await recognizeCanvas(canvas);
+          out.push(data.text || '');
+        }
+      } finally { pdf.destroy?.(); }
+      return { artifact: { text: out.join('\n\n'), pages: out } };
+    },
+  },
+];
+
+return { ops };
+})();
+
 /* ops/index.js */
 const __m_ops_index = (() => {
 // ops/index.js — the one place ops register into the registry. Importing a new op
@@ -2039,6 +2209,7 @@ const textOps = __m_ops_text.ops;
 const redactOps = __m_ops_redact.ops;
 const signOps = __m_ops_sign.ops;
 const convertOps = __m_ops_convert.ops;
+const ocrOps = __m_ops_ocr.ops;
 
 function registerOps() {
   registerAll([
@@ -2052,6 +2223,7 @@ function registerOps() {
     ...redactOps,
     ...signOps,
     ...convertOps,
+    ...ocrOps,
   ]);
 }
 
@@ -2917,6 +3089,7 @@ const P = {
   sign:    '<path d="M3 19c3 0 4-12 7-12s1 9 3 9 2-4 5-4"/><path d="M3 21h18"/>',
   download:'<path d="M12 3v12M7 11l5 5 5-5"/><path d="M5 21h14"/>',
   ai:      '<path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8z"/><path d="M18 14l.9 2.1L21 17l-2.1.9L18 20l-.9-2.1L15 17l2.1-.9z"/>',
+  ocr:     '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h4M7 13h7M15 8.5v3"/>',
 };
 
 function icon(name) {
@@ -4070,6 +4243,89 @@ async function withBusy(message, fn) {
 return { openSidecarMenu };
 })();
 
+/* ui/ocr-menu.js */
+const __m_ui_ocr_menu = (() => {
+// ocr-menu.js — OCR entry point. Make a scan searchable (invisible text layer) or
+// extract its text. Runs 100% locally (vendored engine, no download, no upload) — a
+// progress bar reflects the real Tesseract status. Heavy compute, so it's confirmed
+// and shows progress.
+
+const el = __m_ui_dom.el;
+const clear = __m_ui_dom.clear;
+const openModal = __m_ui_modal.openModal;
+const confirmModal = __m_ui_modal.confirmModal;
+const state = __m_core_state.state;
+const on = __m_core_events.on;
+const off = __m_core_events.off;
+const dispatch = __m_core_runner.dispatch;
+const terminateOcr = __m_core_ocr.terminateOcr;
+const toast = __m_ui_toast.toast;
+
+function openOcrMenu() {
+  if (!state.doc) return;
+  const n = state.doc.pageCount();
+  let close;
+  const item = (label, desc, fn) => el('button', {
+    class: 'btn', style: 'justify-content:flex-start;width:100%;text-align:left;height:auto;padding:10px 12px;flex-direction:column;align-items:flex-start;gap:2px',
+    onClick: async () => { close(); await fn(); },
+  }, [el('span', { text: label, style: 'font-size:14px' }), el('span', { text: desc, style: 'font-size:12px;color:var(--fg-faint)' })]);
+
+  const content = ({ close: c }) => { close = c; return el('div', { style: 'display:flex;flex-direction:column;gap:6px' }, [
+    el('div', { html: `Recognizes text on scanned pages — <b>entirely on this device</b>, no upload, no download (the engine is built in).`, style: 'font-size:12px;color:var(--fg-muted);padding:2px 4px 6px' }),
+    item('Make searchable', `Add an invisible text layer to all ${n} page${n > 1 ? 's' : ''} — the page looks the same but becomes searchable`, () => runOcr('ocr.searchable')),
+    item('Extract text from scan', 'Recognize and download the text as a .txt file', () => runOcr('ocr.extract')),
+  ]); };
+  return openModal({ title: 'OCR', content, actions: [{ label: 'Close', value: true }] });
+}
+
+async function runOcr(opId) {
+  const n = state.doc.pageCount();
+  if (!await confirmModal(`Run OCR on ${n} page${n > 1 ? 's' : ''}? This runs locally and can take a few seconds per page the first time (the engine warms up).`, { title: 'OCR', okLabel: 'Run OCR' })) return;
+
+  const { overlay, setProgress } = progressOverlay();
+  const onProg = (m) => setProgress(m.status, m.progress);
+  on('ocr:progress', onProg);
+  try {
+    const res = await dispatch(opId, {}, { source: 'ui' });
+    if (opId === 'ocr.extract') {
+      const text = res.artifact?.text || '';
+      if (!text.trim()) toast('No text recognized', 'warn');
+      else { downloadText(text); toast('Text extracted', 'ok'); }
+    } else {
+      toast('Pages are now searchable', 'ok');
+    }
+  } catch (e) {
+    toast('OCR failed', 'err', { detail: e.message });
+  } finally {
+    off('ocr:progress', onProg);
+    overlay.remove();
+    terminateOcr().catch(() => {}); // free the worker + wasm
+  }
+}
+
+function progressOverlay() {
+  const label = el('div', { text: 'Starting OCR…', style: 'font-size:13px;margin-bottom:8px' });
+  const bar = el('div', { style: 'height:6px;border-radius:4px;background:var(--accent);width:0%;transition:width .2s' });
+  const overlay = el('div', { style: 'position:fixed;inset:0;z-index:85;display:flex;align-items:center;justify-content:center;background:var(--overlay)' }, [
+    el('div', { style: 'background:var(--panel);border:1px solid var(--panel-border);border-radius:12px;padding:20px 24px;min-width:300px;box-shadow:var(--shadow-pop)' }, [
+      label, el('div', { style: 'height:6px;border-radius:4px;background:var(--bg-sunken);overflow:hidden' }, [bar]),
+    ]),
+  ]);
+  document.body.appendChild(overlay);
+  return { overlay, setProgress: (status, p) => { label.textContent = status ? status[0].toUpperCase() + status.slice(1) + '…' : 'Working…'; if (typeof p === 'number') bar.style.width = `${Math.round(p * 100)}%`; } };
+}
+
+function downloadText(text) {
+  const blob = new Blob([text], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = el('a', { href: url, download: (state.session.fileName || 'document').replace(/\.pdf$/i, '') + '-ocr.txt' });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 8000);
+}
+
+return { openOcrMenu };
+})();
+
 /* ui/toolbar.js */
 const __m_ui_toolbar = (() => {
 // toolbar.js — the top chrome. Buttons dispatch through the runner (the same door
@@ -4104,6 +4360,7 @@ const currentTool = __m_ui_annotate_tools.currentTool;
 const toolSettings = __m_ui_annotate_tools.toolSettings;
 const openFormsDialog = __m_ui_formsdialog.openFormsDialog;
 const openSidecarMenu = __m_ui_sidecar_menu.openSidecarMenu;
+const openOcrMenu = __m_ui_ocr_menu.openOcrMenu;
 
 let bar = null;
 const need = [];   // buttons needing a document
@@ -4185,6 +4442,7 @@ function render(version) {
       btn('merge', '', mergePdf, { needsDoc: true }),
       btn('mark', '', openMarksMenu, { needsDoc: true }),
       btn('forms', '', openFormsDialog, { needsDoc: true }),
+      btn('ocr', '', openOcrMenu, { needsDoc: true }),
       btn('download', '', exportText, { needsDoc: true }),
       btn('info', '', onMetadata, { needsDoc: true }),
     ]),
