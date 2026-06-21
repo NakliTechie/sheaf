@@ -203,8 +203,11 @@ button { font-family: inherit; font-size: inherit; color: inherit; }
 }
 #statusbar .spacer { flex: 1; }
 #statusbar .zoom { display: flex; align-items: center; gap: 4px; }
-#statusbar button { background: none; border: none; color: var(--fg-muted); cursor: pointer; padding: 2px 5px; border-radius: 4px; }
-#statusbar button:hover { background: var(--bg-sunken); color: var(--fg); }
+#statusbar button { background: none; border: none; color: var(--fg-muted); cursor: pointer; padding: 2px 5px; border-radius: 4px; display: inline-flex; align-items: center; }
+#statusbar button:hover:not(:disabled) { background: var(--bg-sunken); color: var(--fg); }
+#statusbar button:disabled { opacity: .35; cursor: default; }
+#statusbar button svg { width: 14px; height: 14px; display: block; }
+#statusbar .filenav span { font-size: 12px; }
 
 /* ── Toasts ──────────────────────────────────────────────────────────────────── */
 #toasts {
@@ -2785,6 +2788,53 @@ function downloadBytes(bytes, name) {
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
+// ── Folder mode + sidecar saves (Slate convention) ──────────────────────────────
+
+// Compact, sortable, human-readable: yymmddhhmmss.
+function tstamp(d = new Date()) {
+  const p = (n) => String(n).padStart(2, '0');
+  return String(d.getFullYear()).slice(-2) + p(d.getMonth() + 1) + p(d.getDate()) + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+}
+
+// Pick a folder of PDFs (read), return its handle + the sorted PDF entries.
+async function pickFolder() {
+  const dirHandle = await window.showDirectoryPicker({ mode: 'read' });
+  return { dirHandle, files: await listPdfs(dirHandle) };
+}
+
+async function listPdfs(dirHandle) {
+  const files = [];
+  for await (const [name, handle] of dirHandle.entries()) {
+    if (handle.kind !== 'file' || !/\.pdf$/i.test(name)) continue;
+    files.push({ handle, name });
+  }
+  // Natural sort so page-2 sorts before page-10.
+  files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  return files;
+}
+
+// Pick a writable workspace folder (for "save a copy" when none is known).
+async function pickWorkspaceFolder() {
+  return window.showDirectoryPicker({ mode: 'readwrite' });
+}
+
+// Save a timestamped copy into a folder, never clobbering: base-yymmddhhmmss.pdf, then
+// base-yymmddhhmmss-1.pdf … on collision. Returns the filename written.
+async function saveSidecar(dirHandle, bytes, baseName) {
+  const base = (baseName || 'document').replace(/\.pdf$/i, '');
+  const stamp = tstamp();
+  let name = `${base}-${stamp}.pdf`;
+  let counter = 1;
+  // getFileHandle without create throws if absent — so a successful get means collision.
+  while (true) {
+    try { await dirHandle.getFileHandle(name); name = `${base}-${stamp}-${counter}.pdf`; counter++; }
+    catch { break; }
+  }
+  const fh = await dirHandle.getFileHandle(name, { create: true });
+  await saveToHandle(fh, bytes);
+  return name;
+}
+
 // ── OPFS crash-recovery staging ──────────────────────────────────────────────────
 // SCAFFOLDING — defined as part of the storage façade but NOT wired in v1.0 (no caller
 // stages or recovers). When wired (a later milestone), this becomes the one place PDF
@@ -2827,7 +2877,7 @@ async function clearStage() {
 
 function nowStamp() { return new Date().toISOString(); }
 
-return { hasFSA, hasOPFS, saveAiConfig, getAiConfig, clearAiConfig, rememberHandle, recentHandles, forgetHandle, saveSignature, listSignatures, deleteSignature, ensurePermission, pickAndReadPdf, readPdfViaInput, saveToHandle, saveAs, downloadBytes, stageWorking, recoverStaged, clearStage };
+return { hasFSA, hasOPFS, saveAiConfig, getAiConfig, clearAiConfig, rememberHandle, recentHandles, forgetHandle, saveSignature, listSignatures, deleteSignature, ensurePermission, pickAndReadPdf, readPdfViaInput, saveToHandle, saveAs, downloadBytes, tstamp, pickFolder, pickWorkspaceFolder, saveSidecar, stageWorking, recoverStaged, clearStage };
 })();
 
 /* core/ai.js */
@@ -3102,6 +3152,9 @@ const P = {
   download:'<path d="M12 3v12M7 11l5 5 5-5"/><path d="M5 21h14"/>',
   ai:      '<path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8z"/><path d="M18 14l.9 2.1L21 17l-2.1.9L18 20l-.9-2.1L15 17l2.1-.9z"/>',
   ocr:     '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h4M7 13h7M15 8.5v3"/>',
+  openfolder:'<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 11h18"/>',
+  copyfile:'<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M4 16V4a2 2 0 0 1 2-2h8"/><path d="M12 12v5M9.5 14.5h5"/>',
+  chevdown:'<path d="M6 9l6 6 6-6"/>',
 };
 
 function icon(name) {
@@ -3544,6 +3597,14 @@ const emit = __m_core_events.emit;
 const storage = __m_core_storage;
 const toast = __m_ui_toast.toast;
 const ensurePdfLib = __m_ui_engines_ui.ensurePdfLib;
+const confirmModal = __m_ui_modal.confirmModal;
+
+// Single-document opens leave "folder mode" — clear the file list so the stepper hides.
+function exitFolderMode() {
+  state.session.files = [];
+  state.session.currentIndex = 0;
+  emit('folder:changed', null);
+}
 
 async function openPdf() {
   try {
@@ -3554,6 +3615,7 @@ async function openPdf() {
     state.session.fileName = picked.name;
     state.session.fileHandle = picked.handle || null;
     state.session.source = picked.handle ? 'fsa' : 'picker';
+    exitFolderMode();
     if (picked.handle) storage.rememberHandle(picked.handle, picked.name).catch(() => {});
     emit('session:changed', null);
     toast(`Opened ${picked.name}`, 'ok');
@@ -3567,6 +3629,7 @@ async function openBytes(bytes, name = 'document.pdf', handle = null) {
   await dispatch('open.bytes', { bytes });
   state.session.fileName = name;
   state.session.fileHandle = handle;
+  exitFolderMode();
   emit('session:changed', null);
 }
 
@@ -3575,6 +3638,7 @@ async function newBlank() {
   await dispatch('open.blank', { pages: 1 });
   state.session.fileName = 'untitled.pdf';
   state.session.fileHandle = null;
+  exitFolderMode();
   emit('session:changed', null);
 }
 
@@ -3612,6 +3676,69 @@ async function savePdfAs() {
   }
 }
 
+// ── Save a copy (sidecar) — never touches the original ──────────────────────────
+// Saves a timestamped copy into the known folder (folder mode / a chosen workspace),
+// or downloads one when File System Access isn't available. The open document and the
+// original file are left exactly as they are — the safe way to version a PDF.
+async function saveCopy() {
+  if (!state.doc) return;
+  try {
+    const bytes = await state.doc.toBytes();
+    const base = (state.session.fileName || 'document').replace(/\.pdf$/i, '');
+    if (!storage.hasFSA) { storage.downloadBytes(bytes, `${base}-${storage.tstamp()}.pdf`); return toast('Downloaded a copy', 'ok'); }
+    let dir = state.session.folderHandle;
+    if (!dir) { dir = await storage.pickWorkspaceFolder(); state.session.folderHandle = dir; }
+    const name = await storage.saveSidecar(dir, bytes, base);
+    toast(`Saved a copy — ${name}`, 'ok');
+  } catch (err) {
+    if (err?.name !== 'AbortError') emit('error', { message: 'Could not save a copy', detail: err.message });
+  }
+}
+
+// ── Folder mode — open a folder of PDFs and step through them ────────────────────
+async function openFolder() {
+  if (!storage.hasFSA) return toast('Folder mode needs a Chromium browser (Chrome / Edge / Brave / Arc)', 'warn');
+  try {
+    const { dirHandle, files } = await storage.pickFolder();
+    if (!files.length) return toast('No PDFs found in that folder', 'warn');
+    state.session.folderHandle = dirHandle;
+    state.session.files = files.map((f, i) => ({ ...f, index: i }));
+    await openFileAt(0, { skipDirtyCheck: true });
+    emit('folder:changed', { count: files.length });
+    toast(`Opened folder — ${files.length} PDF${files.length > 1 ? 's' : ''}`, 'ok');
+  } catch (err) {
+    if (err?.name !== 'AbortError') emit('error', { message: 'Could not open folder', detail: err.message });
+  }
+}
+
+async function openFileAt(index, { skipDirtyCheck = false } = {}) {
+  const files = state.session.files;
+  if (!files.length) return;
+  const i = Math.max(0, Math.min(index, files.length - 1));
+  if (i === state.session.currentIndex && !skipDirtyCheck && state.doc) return;
+  const entry = files[i];
+  if (!skipDirtyCheck && state.dirty) {
+    const ok = await confirmModal(`Discard unsaved changes to ${state.session.fileName}?`, { title: 'Unsaved changes', okLabel: 'Discard', danger: true });
+    if (!ok) return;
+  }
+  try {
+    if (!await storage.ensurePermission(entry.handle, 'read')) return toast('Permission denied', 'warn');
+    await ensurePdfLib();
+    const file = await entry.handle.getFile();
+    await dispatch('open.bytes', { bytes: new Uint8Array(await file.arrayBuffer()) });
+    state.session.fileName = entry.name;
+    state.session.fileHandle = entry.handle;
+    state.session.currentIndex = i;
+    emit('file:changed', { index: i, total: files.length, name: entry.name });
+    emit('session:changed', null);
+  } catch (err) {
+    emit('error', { message: `Could not open ${entry.name}`, detail: err.message });
+  }
+}
+
+const nextFile = () => openFileAt(state.session.currentIndex + 1);
+const prevFile = () => openFileAt(state.session.currentIndex - 1);
+
 async function mergePdf() {
   if (!state.doc) return;
   try {
@@ -3624,7 +3751,48 @@ async function mergePdf() {
   }
 }
 
-return { openPdf, openBytes, newBlank, savePdf, savePdfAs, mergePdf };
+return { openPdf, openBytes, newBlank, savePdf, savePdfAs, saveCopy, openFolder, openFileAt, nextFile, prevFile, mergePdf };
+})();
+
+/* ui/savemenu.js */
+const __m_ui_savemenu = (() => {
+// savemenu.js — the Save options (beyond the primary Save = overwrite-in-place).
+// Save As (new file), Save a copy (timestamped sidecar that never touches the
+// original — the safe way to version a PDF), and Download.
+
+const el = __m_ui_dom.el;
+const openModal = __m_ui_modal.openModal;
+const state = __m_core_state.state;
+const savePdfAs = __m_ui_fileops.savePdfAs;
+const saveCopy = __m_ui_fileops.saveCopy;
+const storage = __m_core_storage;
+const toast = __m_ui_toast.toast;
+
+function openSaveMenu() {
+  if (!state.doc) return;
+  let close;
+  const item = (label, desc, fn) => el('button', {
+    class: 'btn', style: 'justify-content:flex-start;width:100%;text-align:left;height:auto;padding:10px 12px;flex-direction:column;align-items:flex-start;gap:2px',
+    onClick: async () => { close(); await fn(); },
+  }, [el('span', { text: label, style: 'font-size:14px' }), el('span', { text: desc, style: 'font-size:12px;color:var(--fg-faint)' })]);
+
+  const folderKnown = !!state.session.folderHandle;
+  const content = ({ close: c }) => { close = c; return el('div', { style: 'display:flex;flex-direction:column;gap:6px' }, [
+    item('Save as…', 'Write to a new file and keep editing it', savePdfAs),
+    item('Save a copy', folderKnown ? 'Timestamped copy in the current folder — original untouched' : 'Pick a folder; saves a timestamped copy there — original untouched', saveCopy),
+    item('Download', 'Download a copy to your device', downloadCopy),
+  ]); };
+  return openModal({ title: 'Save', content, actions: [{ label: 'Close', value: true }] });
+}
+
+async function downloadCopy() {
+  if (!state.doc) return;
+  const base = (state.session.fileName || 'document').replace(/\.pdf$/i, '');
+  storage.downloadBytes(await state.doc.toBytes(), `${base}.pdf`);
+  toast('Downloaded', 'ok');
+}
+
+return { openSaveMenu };
 })();
 
 /* ui/settings.js */
@@ -4369,6 +4537,8 @@ const newBlank = __m_ui_fileops.newBlank;
 const savePdf = __m_ui_fileops.savePdf;
 const savePdfAs = __m_ui_fileops.savePdfAs;
 const mergePdf = __m_ui_fileops.mergePdf;
+const openFolder = __m_ui_fileops.openFolder;
+const openSaveMenu = __m_ui_savemenu.openSaveMenu;
 const openSettings = __m_ui_settings.openSettings;
 const openHelp = __m_ui_help.openHelp;
 const openMarksMenu = __m_ui_marksmenu.openMarksMenu;
@@ -4387,10 +4557,11 @@ function targetPages() {
   return sel.length ? sel : [state.view.pageIndex];
 }
 
-function btn(iconName, label, onClick, { needsDoc = false, danger = false, id = '' } = {}) {
+function btn(iconName, label, onClick, { needsDoc = false, danger = false, id = '', title = '' } = {}) {
+  const tip = title || label || iconName;
   const b = el('button', {
     class: `btn ${danger ? 'danger' : ''} ${label ? '' : 'icon'}`,
-    title: label || iconName, 'aria-label': label || iconName, onClick, id,
+    title: tip, 'aria-label': tip, onClick, id,
   }, [el('span', { html: icon(iconName) }), label ? el('span.label', { text: label }) : null].filter(Boolean));
   if (needsDoc) need.push(b);
   return b;
@@ -4437,12 +4608,13 @@ function render(version) {
 
     el('div.group', {}, [
       btn('open', 'Open', openPdf),
+      btn('openfolder', '', openFolder, { title: 'Open folder of PDFs' }),
       btn('new', '', newBlank, { id: 'btn-new' }),
     ]),
     el('div.sep'),
     el('div.group', {}, [
       btn('save', 'Save', savePdf, { needsDoc: true }),
-      btn('saveas', '', savePdfAs, { needsDoc: true }),
+      btn('saveas', '', openSaveMenu, { needsDoc: true, title: 'Save options' }),
     ]),
     el('div.sep'),
     el('div.group', {}, [
@@ -4572,12 +4744,15 @@ const on = __m_core_events.on;
 const zoomBy = __m_ui_viewer.zoomBy;
 const setFitMode = __m_ui_viewer.setFitMode;
 const currentScalePct = __m_ui_viewer.currentScalePct;
+const nextFile = __m_ui_fileops.nextFile;
+const prevFile = __m_ui_fileops.prevFile;
 
-let bar = null, pageLabel = null, zoomLabel = null, selLabel = null;
+let bar = null, pageLabel = null, zoomLabel = null, selLabel = null, fileNav = null;
 
 function initStatusbar() {
   bar = document.getElementById('statusbar');
   clear(bar).append(
+    (fileNav = el('div.filenav', { style: 'display:none;align-items:center;gap:4px' })),
     (pageLabel = el('span', { text: '' })),
     (selLabel = el('span', { text: '', style: 'color:var(--fg-faint)' })),
     el('span.spacer'),
@@ -4593,7 +4768,25 @@ function initStatusbar() {
   on('view:changed', update);
   on('viewer:rendered', update);
   on('selection:count', ({ count }) => { if (selLabel) selLabel.textContent = count ? ` · ${count} selected` : ''; });
+  on('folder:changed', renderFileNav);
+  on('file:changed', renderFileNav);
+  on('doc:closed', renderFileNav);
   update();
+}
+
+// The folder-mode file stepper: ◀ filename.pdf (i / N) ▶. Hidden outside folder mode.
+function renderFileNav() {
+  if (!fileNav) return;
+  const files = state.session.files;
+  if (!files || files.length < 2) { fileNav.style.display = 'none'; clear(fileNav); return; }
+  const i = state.session.currentIndex, n = files.length;
+  fileNav.style.display = 'flex';
+  clear(fileNav).append(
+    el('button', { title: 'Previous PDF', 'aria-label': 'Previous PDF', html: icon('undo'), disabled: i <= 0, onClick: () => prevFile() }),
+    el('span', { text: `${state.session.fileName || ''} (${i + 1}/${n})`, style: 'max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }),
+    el('button', { title: 'Next PDF', 'aria-label': 'Next PDF', html: icon('redo'), disabled: i >= n - 1, onClick: () => nextFile() }),
+    el('span', { text: '·', style: 'color:var(--fg-faint);margin:0 4px' }),
+  );
 }
 
 function update() {
@@ -4622,6 +4815,8 @@ const storage = __m_core_storage;
 const openPdf = __m_ui_fileops.openPdf;
 const newBlank = __m_ui_fileops.newBlank;
 const openBytes = __m_ui_fileops.openBytes;
+const openFolder = __m_ui_fileops.openFolder;
+const hasFSA = __m_core_storage.hasFSA;
 const ensurePdfLib = __m_ui_engines_ui.ensurePdfLib;
 const toast = __m_ui_toast.toast;
 
@@ -4650,8 +4845,9 @@ async function render() {
     el('p', { text: 'Drag a PDF here, or open one from your disk. It is edited entirely in this tab and saved back to your file — nothing is uploaded.' }),
     el('div.actions', {}, [
       el('button', { class: 'btn primary', onClick: openPdf }, [el('span', { html: icon('open') }), el('span.label', { text: 'Open PDF' })]),
+      hasFSA ? el('button', { class: 'btn', onClick: openFolder }, [el('span', { html: icon('openfolder') }), el('span.label', { text: 'Open folder' })]) : null,
       el('button', { class: 'btn', onClick: newBlank }, [el('span', { html: icon('new') }), el('span.label', { text: 'New blank' })]),
-    ]),
+    ].filter(Boolean)),
     el('div.privacy', { html: `${icon('moon')} <span>No account · no upload · no telemetry · works offline</span>`, style: 'justify-content:center;margin-top:4px' }),
   ]);
   clear(welcome).append(drop);
@@ -4742,6 +4938,9 @@ const initWelcome = __m_ui_welcome.initWelcome;
 const openPdf = __m_ui_fileops.openPdf;
 const savePdf = __m_ui_fileops.savePdf;
 const savePdfAs = __m_ui_fileops.savePdfAs;
+const openFolder = __m_ui_fileops.openFolder;
+const nextFile = __m_ui_fileops.nextFile;
+const prevFile = __m_ui_fileops.prevFile;
 const openHelp = __m_ui_help.openHelp;
 
 function probe() {
@@ -4758,8 +4957,11 @@ function wireKeyboard() {
 
   keyboard
     .register('mod+o', () => openPdf(), { context: 'global', label: 'Open' })
+    .register('mod+shift+o', () => openFolder(), { context: 'global', label: 'Open folder' })
     .register('mod+s', () => savePdf(), { context: 'global', label: 'Save' })
     .register('mod+shift+s', () => savePdfAs(), { context: 'global', label: 'Save as' })
+    .register(']', () => nextFile(), { context: 'viewer', label: 'Next PDF (folder mode)' })
+    .register('[', () => prevFile(), { context: 'viewer', label: 'Previous PDF (folder mode)' })
     .register('mod+z', () => undo(), { context: 'global', label: 'Undo' })
     .register('mod+shift+z', () => redo(), { context: 'global', label: 'Redo' })
     .register('?', () => openHelp(), { context: 'global', label: 'Help' })

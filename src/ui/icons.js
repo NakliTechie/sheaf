@@ -37,6 +37,9 @@ const P = {
   download:'<path d="M12 3v12M7 11l5 5 5-5"/><path d="M5 21h14"/>',
   ai:      '<path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8z"/><path d="M18 14l.9 2.1L21 17l-2.1.9L18 20l-.9-2.1L15 17l2.1-.9z"/>',
   ocr:     '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h4M7 13h7M15 8.5v3"/>',
+  openfolder:'<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 11h18"/>',
+  copyfile:'<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M4 16V4a2 2 0 0 1 2-2h8"/><path d="M12 12v5M9.5 14.5h5"/>',
+  chevdown:'<path d="M6 9l6 6 6-6"/>',
 };
 
 export function icon(name) {

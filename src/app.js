@@ -19,7 +19,7 @@ import { initViewer, zoomBy, setFitMode, scrollToPage } from './ui/viewer.js';
 import { initThumbs } from './ui/thumbs.js';
 import { initAnnotateTools, setTool } from './ui/annotate-tools.js';
 import { initWelcome } from './ui/welcome.js';
-import { openPdf, savePdf, savePdfAs } from './ui/fileops.js';
+import { openPdf, savePdf, savePdfAs, openFolder, nextFile, prevFile } from './ui/fileops.js';
 import { openHelp } from './ui/help.js';
 
 function probe() {
@@ -36,8 +36,11 @@ function wireKeyboard() {
 
   keyboard
     .register('mod+o', () => openPdf(), { context: 'global', label: 'Open' })
+    .register('mod+shift+o', () => openFolder(), { context: 'global', label: 'Open folder' })
     .register('mod+s', () => savePdf(), { context: 'global', label: 'Save' })
     .register('mod+shift+s', () => savePdfAs(), { context: 'global', label: 'Save as' })
+    .register(']', () => nextFile(), { context: 'viewer', label: 'Next PDF (folder mode)' })
+    .register('[', () => prevFile(), { context: 'viewer', label: 'Previous PDF (folder mode)' })
     .register('mod+z', () => undo(), { context: 'global', label: 'Undo' })
     .register('mod+shift+z', () => redo(), { context: 'global', label: 'Redo' })
     .register('?', () => openHelp(), { context: 'global', label: 'Help' })

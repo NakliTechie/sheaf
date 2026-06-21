@@ -11,7 +11,8 @@ import { savePrefs } from '../core/state.js';
 import { selectedPages } from './thumbs.js';
 import { confirmModal, formModal } from './modal.js';
 import { toast } from './toast.js';
-import { openPdf, newBlank, savePdf, savePdfAs, mergePdf } from './fileops.js';
+import { openPdf, newBlank, savePdf, savePdfAs, mergePdf, openFolder } from './fileops.js';
+import { openSaveMenu } from './savemenu.js';
 import { openSettings } from './settings.js';
 import { openHelp } from './help.js';
 import { openMarksMenu } from './marksmenu.js';
@@ -28,10 +29,11 @@ function targetPages() {
   return sel.length ? sel : [state.view.pageIndex];
 }
 
-function btn(iconName, label, onClick, { needsDoc = false, danger = false, id = '' } = {}) {
+function btn(iconName, label, onClick, { needsDoc = false, danger = false, id = '', title = '' } = {}) {
+  const tip = title || label || iconName;
   const b = el('button', {
     class: `btn ${danger ? 'danger' : ''} ${label ? '' : 'icon'}`,
-    title: label || iconName, 'aria-label': label || iconName, onClick, id,
+    title: tip, 'aria-label': tip, onClick, id,
   }, [el('span', { html: icon(iconName) }), label ? el('span.label', { text: label }) : null].filter(Boolean));
   if (needsDoc) need.push(b);
   return b;
@@ -78,12 +80,13 @@ function render(version) {
 
     el('div.group', {}, [
       btn('open', 'Open', openPdf),
+      btn('openfolder', '', openFolder, { title: 'Open folder of PDFs' }),
       btn('new', '', newBlank, { id: 'btn-new' }),
     ]),
     el('div.sep'),
     el('div.group', {}, [
       btn('save', 'Save', savePdf, { needsDoc: true }),
-      btn('saveas', '', savePdfAs, { needsDoc: true }),
+      btn('saveas', '', openSaveMenu, { needsDoc: true, title: 'Save options' }),
     ]),
     el('div.sep'),
     el('div.group', {}, [

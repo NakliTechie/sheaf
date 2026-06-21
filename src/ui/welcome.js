@@ -7,7 +7,8 @@ import { icon } from './icons.js';
 import { on, emit } from '../core/events.js';
 import { state } from '../core/state.js';
 import * as storage from '../core/storage.js';
-import { openPdf, newBlank, openBytes } from './fileops.js';
+import { openPdf, newBlank, openBytes, openFolder } from './fileops.js';
+import { hasFSA } from '../core/storage.js';
 import { ensurePdfLib } from './engines-ui.js';
 import { toast } from './toast.js';
 
@@ -36,8 +37,9 @@ async function render() {
     el('p', { text: 'Drag a PDF here, or open one from your disk. It is edited entirely in this tab and saved back to your file — nothing is uploaded.' }),
     el('div.actions', {}, [
       el('button', { class: 'btn primary', onClick: openPdf }, [el('span', { html: icon('open') }), el('span.label', { text: 'Open PDF' })]),
+      hasFSA ? el('button', { class: 'btn', onClick: openFolder }, [el('span', { html: icon('openfolder') }), el('span.label', { text: 'Open folder' })]) : null,
       el('button', { class: 'btn', onClick: newBlank }, [el('span', { html: icon('new') }), el('span.label', { text: 'New blank' })]),
-    ]),
+    ].filter(Boolean)),
     el('div.privacy', { html: `${icon('moon')} <span>No account · no upload · no telemetry · works offline</span>`, style: 'justify-content:center;margin-top:4px' }),
   ]);
   clear(welcome).append(drop);

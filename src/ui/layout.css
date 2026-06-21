@@ -102,8 +102,11 @@
 }
 #statusbar .spacer { flex: 1; }
 #statusbar .zoom { display: flex; align-items: center; gap: 4px; }
-#statusbar button { background: none; border: none; color: var(--fg-muted); cursor: pointer; padding: 2px 5px; border-radius: 4px; }
-#statusbar button:hover { background: var(--bg-sunken); color: var(--fg); }
+#statusbar button { background: none; border: none; color: var(--fg-muted); cursor: pointer; padding: 2px 5px; border-radius: 4px; display: inline-flex; align-items: center; }
+#statusbar button:hover:not(:disabled) { background: var(--bg-sunken); color: var(--fg); }
+#statusbar button:disabled { opacity: .35; cursor: default; }
+#statusbar button svg { width: 14px; height: 14px; display: block; }
+#statusbar .filenav span { font-size: 12px; }
 
 /* ── Toasts ──────────────────────────────────────────────────────────────────── */
 #toasts {

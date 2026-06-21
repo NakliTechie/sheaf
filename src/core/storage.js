@@ -161,6 +161,53 @@ export function downloadBytes(bytes, name) {
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
+// ── Folder mode + sidecar saves (Slate convention) ──────────────────────────────
+
+// Compact, sortable, human-readable: yymmddhhmmss.
+export function tstamp(d = new Date()) {
+  const p = (n) => String(n).padStart(2, '0');
+  return String(d.getFullYear()).slice(-2) + p(d.getMonth() + 1) + p(d.getDate()) + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+}
+
+// Pick a folder of PDFs (read), return its handle + the sorted PDF entries.
+export async function pickFolder() {
+  const dirHandle = await window.showDirectoryPicker({ mode: 'read' });
+  return { dirHandle, files: await listPdfs(dirHandle) };
+}
+
+async function listPdfs(dirHandle) {
+  const files = [];
+  for await (const [name, handle] of dirHandle.entries()) {
+    if (handle.kind !== 'file' || !/\.pdf$/i.test(name)) continue;
+    files.push({ handle, name });
+  }
+  // Natural sort so page-2 sorts before page-10.
+  files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  return files;
+}
+
+// Pick a writable workspace folder (for "save a copy" when none is known).
+export async function pickWorkspaceFolder() {
+  return window.showDirectoryPicker({ mode: 'readwrite' });
+}
+
+// Save a timestamped copy into a folder, never clobbering: base-yymmddhhmmss.pdf, then
+// base-yymmddhhmmss-1.pdf … on collision. Returns the filename written.
+export async function saveSidecar(dirHandle, bytes, baseName) {
+  const base = (baseName || 'document').replace(/\.pdf$/i, '');
+  const stamp = tstamp();
+  let name = `${base}-${stamp}.pdf`;
+  let counter = 1;
+  // getFileHandle without create throws if absent — so a successful get means collision.
+  while (true) {
+    try { await dirHandle.getFileHandle(name); name = `${base}-${stamp}-${counter}.pdf`; counter++; }
+    catch { break; }
+  }
+  const fh = await dirHandle.getFileHandle(name, { create: true });
+  await saveToHandle(fh, bytes);
+  return name;
+}
+
 // ── OPFS crash-recovery staging ──────────────────────────────────────────────────
 // SCAFFOLDING — defined as part of the storage façade but NOT wired in v1.0 (no caller
 // stages or recovers). When wired (a later milestone), this becomes the one place PDF
