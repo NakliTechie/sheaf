@@ -2157,15 +2157,29 @@ const currentRenderDoc = __m_ui_rendoc.currentRenderDoc;
 const PAD = 16;
 let viewport = null;
 let renderToken = 0;
+let lastRenderWidth = 0;
 
 function initViewer() {
   viewport = document.getElementById('viewport');
   on('rendoc:ready', () => renderAll());
-  on('rendoc:cleared', () => clear(viewport));
+  on('rendoc:cleared', () => { clear(viewport); lastRenderWidth = 0; });
   on('view:changed', () => renderAll());
   viewport.addEventListener('scroll', trackCurrentPage, { passive: true });
+
+  // Re-render when the viewport's WIDTH actually changes. This is what makes the
+  // initial render correct: #body is un-hidden on open, so the viewport's width only
+  // settles a frame or two after rendoc:ready fires — an early renderAll would size
+  // pages to a near-zero width. The observer catches the settle (and later sidebar /
+  // window changes) and re-renders fit-width/page at the real width.
   let rT;
-  window.addEventListener('resize', () => { clearTimeout(rT); rT = setTimeout(() => { if (state.view.fitMode === 'width' || state.view.fitMode === 'page') renderAll(); }, 150); });
+  const ro = new ResizeObserver(() => {
+    const w = viewport.clientWidth;
+    if (Math.abs(w - lastRenderWidth) < 4) return;        // width unchanged — ignore
+    if (state.view.fitMode !== 'width' && state.view.fitMode !== 'page') { lastRenderWidth = w; return; }
+    clearTimeout(rT);
+    rT = setTimeout(() => { if (state.doc) renderAll(); }, 80);
+  });
+  ro.observe(viewport);
 }
 
 function scaleForPage(p) {
@@ -2182,7 +2196,13 @@ function scaleForPage(p) {
 async function renderAll() {
   const pdf = currentRenderDoc();
   if (!pdf || !state.doc) return;
+  // Don't render fit-width/page at an implausibly small width (the viewport may not
+  // be laid out yet, or the window is momentarily tiny). Leave whatever's shown and
+  // wait — the ResizeObserver re-renders once the width is real.
+  const fitsWidth = state.view.fitMode === 'width' || state.view.fitMode === 'page';
+  if (fitsWidth && viewport.clientWidth < 120) return;
   const my = ++renderToken;
+  lastRenderWidth = viewport.clientWidth;
   const pages = state.doc.pages();
   clear(viewport);
 
