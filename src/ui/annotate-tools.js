@@ -9,9 +9,10 @@ import { dispatch } from '../core/runner.js';
 import { el } from './dom.js';
 import { formModal } from './modal.js';
 import { chooseSignature } from './signature.js';
+import { editTextAt } from './spanedit.js';
 
 const DRAG_TOOLS = new Set(['highlight', 'rect', 'line', 'pencil', 'whiteout', 'redact']);
-const ALL_TOOLS = new Set([...DRAG_TOOLS, 'text', 'sign']);
+const ALL_TOOLS = new Set([...DRAG_TOOLS, 'text', 'sign', 'edittext']);
 
 export const toolSettings = { color: '#ff3b30', highlightColor: '#ffe14d', thickness: 2 };
 
@@ -60,6 +61,12 @@ async function onDown(e) {
       { name: 'fontSize', label: 'Size (pt)', type: 'number', value: 14 },
     ]);
     if (v?.text) dispatch('annotate.textbox', { page, x: at.x, y: at.y, text: v.text, fontSize: v.fontSize, color: toolSettings.color });
+    return;
+  }
+
+  if (active === 'edittext') {
+    const at = normalize(rect, e.clientX, e.clientY);
+    editTextAt(page, at.x, at.y);
     return;
   }
 

@@ -116,6 +116,7 @@ function render(version) {
       toolBtn('line', 'line', 'Line'),
       toolBtn('pencil', 'pencil', 'Draw'),
       toolBtn('textbox', 'text', 'Text'),
+      toolBtn('edittext', 'edittext', 'Edit text (click a line)'),
       toolBtn('eraser', 'whiteout', 'Whiteout & retype'),
       toolBtn('redact', 'redact', 'Redact (true removal)'),
       toolBtn('sign', 'sign', 'Sign'),

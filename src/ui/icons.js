@@ -43,6 +43,7 @@ const P = {
   image:   '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>',
   imgpdf:  '<rect x="3" y="3" width="14" height="14" rx="2"/><circle cx="7.5" cy="7.5" r="1.2"/><path d="M17 12l-4-4L6 15"/><path d="M14 17v4h7v-7h-4"/>',
   compress:'<path d="M9 3v6M9 9l-3-3M9 9 6 12M15 21v-6M15 15l3 3M15 15l3-3"/><path d="M3 9h6v6H3zM15 9h6v6h-6z" fill="none"/>',
+  edittext:'<path d="M4 7V5h12v2M10 5v12M8 17h4"/><path d="M14.5 15.5 19 11l2.5 2.5L17 18l-3 .5z"/>',
 };
 
 export function icon(name) {
