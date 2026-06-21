@@ -6,7 +6,11 @@
   <title>Sheaf — PDF editor</title>
   <meta name="description" content="Browser-native PDF editor. One file. No account, no upload, no telemetry, no limits.">
   <meta name="sheaf-version" content="0.1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; worker-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'">
+  <!-- connect-src allows the AI sidecar to reach the user's OWN provider (BYOK, any
+       https endpoint they configure) and a local Ollama/LM Studio bridge. With no AI
+       configured nothing connects anywhere; with a local model nothing leaves the
+       machine. There is no first-party backend to talk to. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; worker-src 'self' blob:; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; frame-ancestors 'none'; object-src 'none'; base-uri 'self'">
   <style>
 /* ui/theme.css */
 /* theme.css — design tokens (nakli-creative-primitives convention). Every colour,
@@ -2424,6 +2428,356 @@ async function handleUrlMode() {
 return { refreshAgentFace, setAgentFace, handleUrlMode };
 })();
 
+/* core/storage.js */
+const __m_core_storage = (() => {
+// storage.js — the storage façade. FSA (their folder) → OPFS (crash-recovery
+// staging) → IndexedDB (fallback, always available). Order matters; mirror down.
+//
+// SOVEREIGNTY INVARIANT — what may persist, and where:
+//   localStorage : UI prefs only (state.js)
+//   IndexedDB    : recent FSA handles + the signature library. Nothing else.
+//   OPFS         : crash-recovery staging of the working bytes — opt-in, wiped on
+//                  clean close. This is the ONE place document bytes may briefly
+//                  live, and only to survive a crash; it is not durable persistence.
+//   NEVER        : PDF content / page bytes / extracted text / form values in
+//                  localStorage or IndexedDB.
+//
+// Filenames are pinned on first save and never re-derived from a mutable title.
+
+const hasFSA = typeof window !== 'undefined' && 'showOpenFilePicker' in window;
+const hasOPFS = typeof navigator !== 'undefined' && navigator.storage && 'getDirectory' in navigator.storage;
+
+// ── IndexedDB (handles + signatures) ───────────────────────────────────────────
+
+const DB_NAME = 'sheaf';
+const DB_VERSION = 2;
+let _dbp = null;
+
+function db() {
+  if (_dbp) return _dbp;
+  _dbp = new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      const d = req.result;
+      if (!d.objectStoreNames.contains('handles')) d.createObjectStore('handles', { keyPath: 'id' });
+      if (!d.objectStoreNames.contains('signatures')) d.createObjectStore('signatures', { keyPath: 'id' });
+      if (!d.objectStoreNames.contains('aiconfig')) d.createObjectStore('aiconfig', { keyPath: 'id' });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return _dbp;
+}
+
+async function idbGet(store, id) {
+  const d = await db();
+  return new Promise((res, rej) => {
+    const tx = d.transaction(store, 'readonly');
+    const req = tx.objectStore(store).get(id);
+    req.onsuccess = () => res(req.result || null); req.onerror = () => rej(req.error);
+  });
+}
+
+// AI config (VaultMind BYOK). The endpoint/model + the API KEY live here, in the
+// user's own IndexedDB — never sent anywhere except, as an Authorization header, to the
+// endpoint the user themselves configured. There is no "our infra" — this is a static
+// file. Stored locally so the user doesn't re-enter it each session.
+async function saveAiConfig(cfg) { return idbPut('aiconfig', { id: 'byok', ...cfg }); }
+async function getAiConfig() { return idbGet('aiconfig', 'byok'); }
+async function clearAiConfig() { return idbDelete('aiconfig', 'byok'); }
+
+async function idbPut(store, value) {
+  const d = await db();
+  return new Promise((res, rej) => {
+    const tx = d.transaction(store, 'readwrite');
+    tx.objectStore(store).put(value);
+    tx.oncomplete = () => res(true); tx.onerror = () => rej(tx.error);
+  });
+}
+async function idbGetAll(store) {
+  const d = await db();
+  return new Promise((res, rej) => {
+    const tx = d.transaction(store, 'readonly');
+    const req = tx.objectStore(store).getAll();
+    req.onsuccess = () => res(req.result || []); req.onerror = () => rej(req.error);
+  });
+}
+async function idbDelete(store, id) {
+  const d = await db();
+  return new Promise((res, rej) => {
+    const tx = d.transaction(store, 'readwrite');
+    tx.objectStore(store).delete(id);
+    tx.oncomplete = () => res(true); tx.onerror = () => rej(tx.error);
+  });
+}
+
+// Recent FSA handles — store the handle object itself (structured-clonable) so the
+// file can be re-opened on a later visit after a permission re-grant. NO bytes.
+const MAX_RECENT = 10;
+async function rememberHandle(handle, name) {
+  if (!handle) return;
+  const id = name || handle.name || String(Math.random());
+  await idbPut('handles', { id, handle, name: id, kind: handle.kind, at: nowStamp() });
+  const all = (await idbGetAll('handles')).sort((a, b) => (b.at || '').localeCompare(a.at || ''));
+  for (const old of all.slice(MAX_RECENT)) await idbDelete('handles', old.id);
+}
+async function recentHandles() {
+  return (await idbGetAll('handles')).sort((a, b) => (b.at || '').localeCompare(a.at || ''));
+}
+async function forgetHandle(id) { return idbDelete('handles', id); }
+
+// Signature library (M4 fills this in; the store + API exist from M0 so Sign rides
+// the façade rather than inventing its own storage).
+async function saveSignature(sig) { return idbPut('signatures', sig); }
+async function listSignatures() { return idbGetAll('signatures'); }
+async function deleteSignature(id) { return idbDelete('signatures', id); }
+
+// ── Permission re-grant (FSA handles need it on revisit) ────────────────────────
+
+async function ensurePermission(handle, mode = 'read') {
+  if (!handle?.queryPermission) return true;
+  if ((await handle.queryPermission({ mode })) === 'granted') return true;
+  return (await handle.requestPermission({ mode })) === 'granted';
+}
+
+// ── FSA open / save + download fallback ─────────────────────────────────────────
+
+async function pickAndReadPdf() {
+  const [handle] = await window.showOpenFilePicker({
+    types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }],
+    multiple: false,
+  });
+  const file = await handle.getFile();
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  return { handle, name: file.name, bytes };
+}
+
+function readPdfViaInput() {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'application/pdf,.pdf';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return resolve(null);
+      resolve({ handle: null, name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) });
+    };
+    input.click();
+  });
+}
+
+async function saveToHandle(handle, bytes) {
+  const writable = await handle.createWritable();
+  await writable.write(bytes);
+  await writable.close();
+}
+
+async function saveAs(bytes, suggestedName) {
+  if (hasFSA && window.showSaveFilePicker) {
+    const handle = await window.showSaveFilePicker({
+      suggestedName,
+      types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }],
+    });
+    await saveToHandle(handle, bytes);
+    return handle;
+  }
+  downloadBytes(bytes, suggestedName);
+  return null;
+}
+
+function downloadBytes(bytes, name) {
+  const blob = new Blob([bytes], { type: 'application/pdf' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name || 'document.pdf';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+// ── OPFS crash-recovery staging (opt-in; wiped on clean close) ───────────────────
+
+const STAGE_FILE = 'sheaf-working.pdf';
+const STAGE_META = 'sheaf-working.json';
+
+async function stageWorking(bytes, meta = {}) {
+  if (!hasOPFS) return false;
+  try {
+    const root = await navigator.storage.getDirectory();
+    const fh = await root.getFileHandle(STAGE_FILE, { create: true });
+    const w = await fh.createWritable(); await w.write(bytes); await w.close();
+    const mh = await root.getFileHandle(STAGE_META, { create: true });
+    const mw = await mh.createWritable(); await mw.write(JSON.stringify({ ...meta, at: nowStamp() })); await mw.close();
+    return true;
+  } catch { return false; }
+}
+async function recoverStaged() {
+  if (!hasOPFS) return null;
+  try {
+    const root = await navigator.storage.getDirectory();
+    const fh = await root.getFileHandle(STAGE_FILE);
+    const meta = await (await (await root.getFileHandle(STAGE_META)).getFile()).text().then(JSON.parse).catch(() => ({}));
+    const bytes = new Uint8Array(await (await fh.getFile()).arrayBuffer());
+    return { bytes, meta };
+  } catch { return null; }
+}
+async function clearStage() {
+  if (!hasOPFS) return;
+  try {
+    const root = await navigator.storage.getDirectory();
+    await root.removeEntry(STAGE_FILE).catch(() => {});
+    await root.removeEntry(STAGE_META).catch(() => {});
+  } catch {}
+}
+
+function nowStamp() { return new Date().toISOString(); }
+
+return { hasFSA, hasOPFS, saveAiConfig, getAiConfig, clearAiConfig, rememberHandle, recentHandles, forgetHandle, saveSignature, listSignatures, deleteSignature, ensurePermission, pickAndReadPdf, readPdfViaInput, saveToHandle, saveAs, downloadBytes, stageWorking, recoverStaged, clearStage };
+})();
+
+/* core/ai.js */
+const __m_core_ai = (() => {
+// ai.js — the nakli-ai primitive (Edge-First inference). Sheaf reaches a model ONLY
+// through here; no surface POSTs to a provider directly. Built inside Sheaf for now
+// (no shared package exists yet) but shaped to lift into the suite primitive: a clean
+// ladder + a single complete() verb.
+//
+// THE LADDER (Edge-First, detected-not-configured):
+//   1. local bridge   — Ollama / LM Studio on localhost (OpenAI-compatible). Detected.
+//   2. WebGPU         — Transformers.js in-tab. (structured; lazy, opt-in download)
+//   3. BYOK           — the user's own provider + key (VaultMind: key local, never to
+//                       us, fingerprint shown). The realistic default.
+//   4. relay          — sovereign zero-retention relay. (structured; not wired in v1.0)
+//
+// HONESTY: local tiers → nothing leaves the machine. BYOK → only the minimum slice the
+// task needs leaves, to the USER'S provider, never to us. describeLeakage() surfaces
+// which, so the UI can be honest, not blurred.
+//
+// COST/CONSEQUENCE: complete() runs only on an explicit user action (the surfaces gate
+// it); it never auto-commits — every result is a staged proposal the deterministic core
+// gates. Pull this module out and every Sheaf operation still works (the no-AI floor).
+
+const getAiConfig = __m_core_storage.getAiConfig;
+const saveAiConfig = __m_core_storage.saveAiConfig;
+const clearAiConfig = __m_core_storage.clearAiConfig;
+const emit = __m_core_events.emit;
+
+const LOCAL_PROBES = [
+  { id: 'ollama', name: 'Ollama', base: 'http://localhost:11434', models: '/v1/models', chat: '/v1/chat/completions' },
+  { id: 'lmstudio', name: 'LM Studio', base: 'http://localhost:1234', models: '/v1/models', chat: '/v1/chat/completions' },
+];
+
+const _state = {
+  local: null,        // detected local bridge descriptor, or null
+  byok: null,         // { endpoint, model, keyFingerprint } (key itself lives in storage)
+  tier: 'none',       // 'local' | 'byok' | 'none'
+};
+
+// Injectable for tests; defaults to global fetch.
+let _fetch = (typeof fetch !== 'undefined') ? ((...a) => fetch(...a)) : null;
+function _setFetch(fn) { _fetch = fn; }
+
+function aiState() { return { tier: _state.tier, local: _state.local?.name || null, byok: _state.byok ? { endpoint: _state.byok.endpoint, model: _state.byok.model, fingerprint: _state.byok.keyFingerprint } : null }; }
+function isAvailable() { return _state.tier !== 'none'; }
+
+// Honest one-liner about where data goes for the active tier.
+function describeLeakage() {
+  if (_state.tier === 'local') return `Local model (${_state.local.name}) — nothing leaves this machine.`;
+  if (_state.tier === 'byok') return `Your provider (${hostOf(_state.byok.endpoint)}) — only the minimum text the task needs is sent, to your own key. Never to us.`;
+  return 'No model configured — AI features are off.';
+}
+
+function hostOf(url) { try { return new URL(url).host; } catch { return url; } }
+
+async function fingerprint(key) {
+  try {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
+    return [...new Uint8Array(buf)].slice(0, 4).map(b => b.toString(16).padStart(2, '0')).join('');
+  } catch { return key.slice(0, 4) + '…'; }
+}
+
+// Probe localhost bridges (cheap, fails fast/quiet). Detected, not configured.
+async function detectLocal({ timeoutMs = 800 } = {}) {
+  for (const p of LOCAL_PROBES) {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+      const res = await _fetch(p.base + p.models, { signal: ctrl.signal });
+      clearTimeout(t);
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const model = data?.data?.[0]?.id || 'local';
+        _state.local = { ...p, model };
+        _state.tier = 'local';   // local wins the ladder — nothing leaves the machine
+        emit('ai:changed', aiState());
+        return _state.local;
+      }
+    } catch { /* not present — quiet */ }
+  }
+  _state.local = null;
+  if (_state.tier === 'local') _state.tier = _state.byok ? 'byok' : 'none';
+  return null;
+}
+
+// Load any saved BYOK config + (re)detect local. Sets the active tier: local wins
+// (closest, nothing leaves) unless absent, then BYOK.
+async function init() {
+  const cfg = await getAiConfig().catch(() => null);
+  if (cfg?.endpoint && cfg?.model) _state.byok = { endpoint: cfg.endpoint, model: cfg.model, keyFingerprint: cfg.keyFingerprint || '' };
+  await detectLocal().catch(() => {});
+  _state.tier = _state.local ? 'local' : (_state.byok ? 'byok' : 'none');
+  emit('ai:changed', aiState());
+  return aiState();
+}
+
+async function configureByok({ endpoint, model, apiKey }) {
+  if (!endpoint || !model) throw new Error('Endpoint and model are required');
+  const keyFingerprint = apiKey ? await fingerprint(apiKey) : '';
+  await saveAiConfig({ endpoint: endpoint.trim(), model: model.trim(), apiKey: apiKey || '', keyFingerprint });
+  _state.byok = { endpoint: endpoint.trim(), model: model.trim(), keyFingerprint };
+  if (_state.tier !== 'local') _state.tier = 'byok';
+  emit('ai:changed', aiState());
+}
+
+async function disableByok() { await clearAiConfig(); _state.byok = null; _state.tier = _state.local ? 'local' : 'none'; emit('ai:changed', aiState()); }
+
+// The one verb. messages = [{role, content}]. opts.json → ask for + parse JSON.
+// Throws if no tier is available (callers must check isAvailable first / the no-AI
+// surface stays usable without ever calling this).
+async function complete(messages, { json = false, maxTokens = 700, temperature = 0.2 } = {}) {
+  if (_state.tier === 'none') throw new Error('No model configured');
+  const sys = json ? { role: 'system', content: 'Respond with ONLY valid minified JSON, no prose, no code fences.' } : null;
+  const body = { model: activeModel(), messages: sys ? [sys, ...messages] : messages, temperature, max_tokens: maxTokens, stream: false };
+
+  let url, headers = { 'Content-Type': 'application/json' };
+  if (_state.tier === 'local') { url = _state.local.base + _state.local.chat; }
+  else {
+    url = _state.byok.endpoint;
+    const cfg = await getAiConfig();
+    if (cfg?.apiKey) headers['Authorization'] = `Bearer ${cfg.apiKey}`;
+  }
+
+  const res = await _fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(`Model error ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`);
+  const data = await res.json();
+  const text = data?.choices?.[0]?.message?.content ?? '';
+  if (!json) return text;
+  return parseJsonLoose(text);
+}
+
+function activeModel() { return _state.tier === 'local' ? _state.local.model : _state.byok.model; }
+
+// Models sometimes wrap JSON in prose/fences despite instruction — extract robustly.
+function parseJsonLoose(text) {
+  try { return JSON.parse(text); } catch {}
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) { try { return JSON.parse(fenced[1]); } catch {} }
+  const span = text.match(/[[{][\s\S]*[\]}]/);
+  if (span) { try { return JSON.parse(span[0]); } catch {} }
+  throw new Error('Model did not return valid JSON');
+}
+
+return { _setFetch, aiState, isAvailable, describeLeakage, detectLocal, init, configureByok, disableByok, complete };
+})();
+
 /* ui/dom.js */
 const __m_ui_dom = (() => {
 // dom.js — the tiniest DOM helper. el('div.foo', {props}, [children]).
@@ -2537,6 +2891,7 @@ const P = {
   forms:   '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>',
   sign:    '<path d="M3 19c3 0 4-12 7-12s1 9 3 9 2-4 5-4"/><path d="M3 21h18"/>',
   download:'<path d="M12 3v12M7 11l5 5 5-5"/><path d="M5 21h14"/>',
+  ai:      '<path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8z"/><path d="M18 14l.9 2.1L21 17l-2.1.9L18 20l-.9-2.1L15 17l2.1-.9z"/>',
 };
 
 function icon(name) {
@@ -2937,193 +3292,6 @@ function formModal(title, fields, { okLabel = 'Save' } = {}) {
 }
 
 return { openModal, confirmModal, formModal };
-})();
-
-/* core/storage.js */
-const __m_core_storage = (() => {
-// storage.js — the storage façade. FSA (their folder) → OPFS (crash-recovery
-// staging) → IndexedDB (fallback, always available). Order matters; mirror down.
-//
-// SOVEREIGNTY INVARIANT — what may persist, and where:
-//   localStorage : UI prefs only (state.js)
-//   IndexedDB    : recent FSA handles + the signature library. Nothing else.
-//   OPFS         : crash-recovery staging of the working bytes — opt-in, wiped on
-//                  clean close. This is the ONE place document bytes may briefly
-//                  live, and only to survive a crash; it is not durable persistence.
-//   NEVER        : PDF content / page bytes / extracted text / form values in
-//                  localStorage or IndexedDB.
-//
-// Filenames are pinned on first save and never re-derived from a mutable title.
-
-const hasFSA = typeof window !== 'undefined' && 'showOpenFilePicker' in window;
-const hasOPFS = typeof navigator !== 'undefined' && navigator.storage && 'getDirectory' in navigator.storage;
-
-// ── IndexedDB (handles + signatures) ───────────────────────────────────────────
-
-const DB_NAME = 'sheaf';
-const DB_VERSION = 1;
-let _dbp = null;
-
-function db() {
-  if (_dbp) return _dbp;
-  _dbp = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      const d = req.result;
-      if (!d.objectStoreNames.contains('handles')) d.createObjectStore('handles', { keyPath: 'id' });
-      if (!d.objectStoreNames.contains('signatures')) d.createObjectStore('signatures', { keyPath: 'id' });
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-  return _dbp;
-}
-
-async function idbPut(store, value) {
-  const d = await db();
-  return new Promise((res, rej) => {
-    const tx = d.transaction(store, 'readwrite');
-    tx.objectStore(store).put(value);
-    tx.oncomplete = () => res(true); tx.onerror = () => rej(tx.error);
-  });
-}
-async function idbGetAll(store) {
-  const d = await db();
-  return new Promise((res, rej) => {
-    const tx = d.transaction(store, 'readonly');
-    const req = tx.objectStore(store).getAll();
-    req.onsuccess = () => res(req.result || []); req.onerror = () => rej(req.error);
-  });
-}
-async function idbDelete(store, id) {
-  const d = await db();
-  return new Promise((res, rej) => {
-    const tx = d.transaction(store, 'readwrite');
-    tx.objectStore(store).delete(id);
-    tx.oncomplete = () => res(true); tx.onerror = () => rej(tx.error);
-  });
-}
-
-// Recent FSA handles — store the handle object itself (structured-clonable) so the
-// file can be re-opened on a later visit after a permission re-grant. NO bytes.
-const MAX_RECENT = 10;
-async function rememberHandle(handle, name) {
-  if (!handle) return;
-  const id = name || handle.name || String(Math.random());
-  await idbPut('handles', { id, handle, name: id, kind: handle.kind, at: nowStamp() });
-  const all = (await idbGetAll('handles')).sort((a, b) => (b.at || '').localeCompare(a.at || ''));
-  for (const old of all.slice(MAX_RECENT)) await idbDelete('handles', old.id);
-}
-async function recentHandles() {
-  return (await idbGetAll('handles')).sort((a, b) => (b.at || '').localeCompare(a.at || ''));
-}
-async function forgetHandle(id) { return idbDelete('handles', id); }
-
-// Signature library (M4 fills this in; the store + API exist from M0 so Sign rides
-// the façade rather than inventing its own storage).
-async function saveSignature(sig) { return idbPut('signatures', sig); }
-async function listSignatures() { return idbGetAll('signatures'); }
-async function deleteSignature(id) { return idbDelete('signatures', id); }
-
-// ── Permission re-grant (FSA handles need it on revisit) ────────────────────────
-
-async function ensurePermission(handle, mode = 'read') {
-  if (!handle?.queryPermission) return true;
-  if ((await handle.queryPermission({ mode })) === 'granted') return true;
-  return (await handle.requestPermission({ mode })) === 'granted';
-}
-
-// ── FSA open / save + download fallback ─────────────────────────────────────────
-
-async function pickAndReadPdf() {
-  const [handle] = await window.showOpenFilePicker({
-    types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }],
-    multiple: false,
-  });
-  const file = await handle.getFile();
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  return { handle, name: file.name, bytes };
-}
-
-function readPdfViaInput() {
-  return new Promise((resolve) => {
-    const input = document.createElement('input');
-    input.type = 'file'; input.accept = 'application/pdf,.pdf';
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return resolve(null);
-      resolve({ handle: null, name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) });
-    };
-    input.click();
-  });
-}
-
-async function saveToHandle(handle, bytes) {
-  const writable = await handle.createWritable();
-  await writable.write(bytes);
-  await writable.close();
-}
-
-async function saveAs(bytes, suggestedName) {
-  if (hasFSA && window.showSaveFilePicker) {
-    const handle = await window.showSaveFilePicker({
-      suggestedName,
-      types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }],
-    });
-    await saveToHandle(handle, bytes);
-    return handle;
-  }
-  downloadBytes(bytes, suggestedName);
-  return null;
-}
-
-function downloadBytes(bytes, name) {
-  const blob = new Blob([bytes], { type: 'application/pdf' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = name || 'document.pdf';
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
-}
-
-// ── OPFS crash-recovery staging (opt-in; wiped on clean close) ───────────────────
-
-const STAGE_FILE = 'sheaf-working.pdf';
-const STAGE_META = 'sheaf-working.json';
-
-async function stageWorking(bytes, meta = {}) {
-  if (!hasOPFS) return false;
-  try {
-    const root = await navigator.storage.getDirectory();
-    const fh = await root.getFileHandle(STAGE_FILE, { create: true });
-    const w = await fh.createWritable(); await w.write(bytes); await w.close();
-    const mh = await root.getFileHandle(STAGE_META, { create: true });
-    const mw = await mh.createWritable(); await mw.write(JSON.stringify({ ...meta, at: nowStamp() })); await mw.close();
-    return true;
-  } catch { return false; }
-}
-async function recoverStaged() {
-  if (!hasOPFS) return null;
-  try {
-    const root = await navigator.storage.getDirectory();
-    const fh = await root.getFileHandle(STAGE_FILE);
-    const meta = await (await (await root.getFileHandle(STAGE_META)).getFile()).text().then(JSON.parse).catch(() => ({}));
-    const bytes = new Uint8Array(await (await fh.getFile()).arrayBuffer());
-    return { bytes, meta };
-  } catch { return null; }
-}
-async function clearStage() {
-  if (!hasOPFS) return;
-  try {
-    const root = await navigator.storage.getDirectory();
-    await root.removeEntry(STAGE_FILE).catch(() => {});
-    await root.removeEntry(STAGE_META).catch(() => {});
-  } catch {}
-}
-
-function nowStamp() { return new Date().toISOString(); }
-
-return { hasFSA, hasOPFS, rememberHandle, recentHandles, forgetHandle, saveSignature, listSignatures, deleteSignature, ensurePermission, pickAndReadPdf, readPdfViaInput, saveToHandle, saveAs, downloadBytes, stageWorking, recoverStaged, clearStage };
 })();
 
 /* ui/engines-ui.js */
@@ -3654,6 +3822,229 @@ async function flatten() {
 return { openFormsDialog };
 })();
 
+/* core/sidecar.js */
+const __m_core_sidecar = (() => {
+// sidecar.js — the AI sidecar surfaces. Each rides a REAL Sheaf surface, sends only
+// the minimum slice the task needs, and returns a STAGED proposal — it never commits.
+// The proposal is executed (or not) through the deterministic registry ops, so the AI
+// is a removable passenger: remove this file and metadata/redaction still work by hand.
+//
+// Cost is opt-in (these run only on an explicit user action). Consequence is opt-in
+// (callers stage the result and let the user confirm before dispatching the op).
+
+const complete = __m_core_ai.complete;
+const isAvailable = __m_core_ai.isAvailable;
+const openForRender = __m_core_render.openForRender;
+
+// Text items with normalized (0..1, top-left) boxes — for redaction targeting.
+async function pageTextItems(pdf, pageIndex) {
+  const page = await pdf.getPage(pageIndex + 1);
+  const vp = page.getViewport({ scale: 1 });
+  const W = vp.width, H = vp.height;
+  const tc = await page.getTextContent();
+  return tc.items.filter(it => it.str?.trim()).map(it => {
+    const [, b, , d, e, f] = it.transform;
+    const h = it.height || Math.hypot(b, d) || 10;
+    return { str: it.str, x: e / W, y: (H - (f + h)) / H, w: (it.width || 0) / W, h: h / H };
+  });
+}
+
+// suggest-metadata — infer title/author/subject/keywords from a SLICE of the text.
+// The slice (not the whole document) is what leaves, to the user's own provider.
+async function suggestMetadata(doc) {
+  if (!isAvailable()) throw new Error('No model configured');
+  const pdf = await openForRender(await doc.toBytes());
+  let text = '';
+  for (let i = 0; i < Math.min(pdf.numPages, 2); i++) {
+    const tc = await (await pdf.getPage(i + 1)).getTextContent();
+    text += tc.items.map(x => x.str).join(' ') + '\n';
+  }
+  pdf.destroy?.();
+  text = text.replace(/\s+/g, ' ').slice(0, 4000); // minimum slice
+  if (!text.trim()) throw new Error('No extractable text (a scanned PDF needs OCR first)');
+  const out = await complete([
+    { role: 'user', content: `Infer concise document metadata from this text. Return JSON {"title","author","subject","keywords"} — keywords comma-separated, empty string when unknown.\n\n${text}` },
+  ], { json: true });
+  return {
+    title: out.title || '', author: out.author || '', subject: out.subject || '',
+    keywords: Array.isArray(out.keywords) ? out.keywords.join(', ') : (out.keywords || ''),
+  };
+}
+
+// describe-to-redact — the model only sees the DESCRIPTION ("account numbers"), turns it
+// into regex patterns; positions are found LOCALLY via PDF.js. The document's text never
+// leaves the machine for this. Returns proposed redaction regions to STAGE for review.
+async function describeToRedact(doc, description) {
+  if (!isAvailable()) throw new Error('No model configured');
+  const out = await complete([
+    { role: 'user', content: `The user wants to redact: "${description}". Return JSON {"patterns":["<regex source>", ...]} — JavaScript regular-expression sources (no slashes, no flags) that match such text. Be precise; prefer specific patterns over broad ones.` },
+  ], { json: true });
+  const sources = Array.isArray(out.patterns) ? out.patterns : [];
+  const patterns = sources.map(p => { try { return new RegExp(p, 'gi'); } catch { return null; } }).filter(Boolean);
+  if (!patterns.length) return { regions: [], patterns: sources };
+
+  const pdf = await openForRender(await doc.toBytes());
+  const regions = [];
+  for (let i = 0; i < pdf.numPages; i++) {
+    for (const it of await pageTextItems(pdf, i)) {
+      for (const re of patterns) { re.lastIndex = 0; if (re.test(it.str)) { regions.push({ page: i, x: it.x, y: it.y, w: it.w, h: it.h, text: it.str }); break; } }
+    }
+  }
+  pdf.destroy?.();
+  return { regions, patterns: sources };
+}
+
+return { suggestMetadata, describeToRedact };
+})();
+
+/* ui/ai-settings.js */
+const __m_ui_ai_settings = (() => {
+// ai-settings.js — configure the AI sidecar. The ladder is detected, not picked: a
+// local Ollama/LM Studio is found automatically; the only thing to configure is BYOK
+// (your own provider + key). Honest about where data goes. Off until configured —
+// the whole tool works with nothing here.
+
+const el = __m_ui_dom.el;
+const openModal = __m_ui_modal.openModal;
+const confirmModal = __m_ui_modal.confirmModal;
+const aiState = __m_core_ai.aiState;
+const describeLeakage = __m_core_ai.describeLeakage;
+const configureByok = __m_core_ai.configureByok;
+const disableByok = __m_core_ai.disableByok;
+const detectLocal = __m_core_ai.detectLocal;
+const init = __m_core_ai.init;
+const getAiConfig = __m_core_storage.getAiConfig;
+const toast = __m_ui_toast.toast;
+
+async function openAiSettings() {
+  await init().catch(() => {});
+  const cfg = await getAiConfig().catch(() => null);
+  const s = aiState();
+
+  const content = ({ close }) => {
+    const endpoint = el('input', { type: 'url', value: cfg?.endpoint || '', placeholder: 'https://api.openai.com/v1/chat/completions' });
+    const model = el('input', { type: 'text', value: cfg?.model || '', placeholder: 'gpt-4o-mini  ·  llama3.1  ·  …' });
+    const key = el('input', { type: 'password', value: '', placeholder: cfg?.keyFingerprint ? `saved (fp ${cfg.keyFingerprint})` : 'sk-…  (stays on this device)' });
+
+    return el('div', { style: 'display:flex;flex-direction:column;gap:14px' }, [
+      el('div', { style: 'font-size:13px;padding:8px 10px;border-radius:8px;background:var(--bg-sunken)' }, [
+        el('div', { html: `<b>Active:</b> ${s.tier === 'none' ? 'no model (AI features off)' : s.tier}` }),
+        el('div', { text: describeLeakage(), style: 'color:var(--fg-muted);margin-top:4px;font-size:12px' }),
+        s.local ? null : el('div', { text: 'Tip: run Ollama or LM Studio locally and it’s detected automatically — nothing leaves your machine.', style: 'color:var(--fg-faint);margin-top:4px;font-size:12px' }),
+      ]),
+      el('div', { text: 'Bring your own key (any OpenAI-compatible endpoint)', style: 'font-size:13px;color:var(--fg-muted)' }),
+      el('label', {}, ['Endpoint', endpoint]),
+      el('label', {}, ['Model', model]),
+      el('label', {}, ['API key', key]),
+      el('div', { style: 'font-size:12px;color:var(--fg-faint);line-height:1.5', html: 'Your key is stored only in this browser’s local database and sent <b>only</b> to the endpoint you enter — never to us (there is no “us”; this is a single static file). Pull the AI out entirely and every Sheaf tool still works.' }),
+      el('div', { style: 'display:flex;gap:8px' }, [
+        el('button', { class: 'btn primary', onClick: async () => {
+          try { await configureByok({ endpoint: endpoint.value, model: model.value, apiKey: key.value || (cfg?.apiKey || '') }); toast('AI sidecar configured', 'ok'); close(true); }
+          catch (e) { toast('Could not save', 'err', { detail: e.message }); }
+        } }, ['Save']),
+        cfg ? el('button', { class: 'btn danger', onClick: async () => { if (await confirmModal('Remove the saved provider + key from this device?', { title: 'Disable AI', okLabel: 'Remove', danger: true })) { await disableByok(); toast('AI disabled', 'ok'); close(true); } } }, ['Disable']) : null,
+        el('button', { class: 'btn', onClick: async () => { const l = await detectLocal(); toast(l ? `Found ${l.name}` : 'No local model detected', l ? 'ok' : 'warn'); } }, ['Re-detect local']),
+      ]),
+    ]);
+  };
+
+  return openModal({ title: 'AI sidecar', content, actions: [{ label: 'Close', value: true }] });
+}
+
+return { openAiSettings };
+})();
+
+/* ui/sidecar-menu.js */
+const __m_ui_sidecar_menu = (() => {
+// sidecar-menu.js — the AI entry point. Every action here STAGES: it produces a
+// proposal the user reviews, then the deterministic registry op commits it. Cost is
+// opt-in (you click it); consequence is opt-in (you confirm before it runs).
+
+const el = __m_ui_dom.el;
+const openModal = __m_ui_modal.openModal;
+const formModal = __m_ui_modal.formModal;
+const confirmModal = __m_ui_modal.confirmModal;
+const state = __m_core_state.state;
+const isAvailable = __m_core_ai.isAvailable;
+const describeLeakage = __m_core_ai.describeLeakage;
+const suggestMetadata = __m_core_sidecar.suggestMetadata;
+const describeToRedact = __m_core_sidecar.describeToRedact;
+const dispatch = __m_core_runner.dispatch;
+const openAiSettings = __m_ui_ai_settings.openAiSettings;
+const toast = __m_ui_toast.toast;
+
+function openSidecarMenu() {
+  if (!state.doc) return;
+  const item = (label, desc, fn) => el('button', {
+    class: 'btn', style: 'justify-content:flex-start;width:100%;text-align:left;height:auto;padding:10px 12px;flex-direction:column;align-items:flex-start;gap:2px',
+    onClick: async () => { close(); await fn(); },
+  }, [el('span', { text: label, style: 'font-size:14px' }), el('span', { text: desc, style: 'font-size:12px;color:var(--fg-faint)' })]);
+
+  let close;
+  const content = ({ close: c }) => { close = c; return el('div', { style: 'display:flex;flex-direction:column;gap:6px' }, [
+    isAvailable()
+      ? el('div', { text: describeLeakage(), style: 'font-size:12px;color:var(--ok);padding:2px 4px 6px' })
+      : el('div', { html: 'No model configured — these stage proposals once you add one.', style: 'font-size:12px;color:var(--warn);padding:2px 4px 6px' }),
+    item('Suggest metadata', 'Infer title/author/keywords from the text — review before applying', suggestMeta),
+    item('Redact by description', 'Describe what to remove; find it locally, confirm, then true-redact', redactByDescription),
+    el('hr', { style: 'border:none;border-top:1px solid var(--panel-border);margin:4px 0' }),
+    item('Configure AI sidecar…', 'BYOK / local model · honest about what leaves', openAiSettings),
+  ]); };
+  return openModal({ title: 'AI sidecar', content, actions: [{ label: 'Close', value: true }] });
+}
+
+async function ensureAi() {
+  if (isAvailable()) return true;
+  if (await confirmModal('No AI model is configured. Set one up now?', { title: 'AI sidecar', okLabel: 'Configure' })) await openAiSettings();
+  return isAvailable();
+}
+
+async function suggestMeta() {
+  if (!await ensureAi()) return;
+  let proposal;
+  try { proposal = await withBusy('Reading the document…', () => suggestMetadata(state.doc)); }
+  catch (e) { return toast('Suggestion failed', 'err', { detail: e.message }); }
+  // STAGE: prefill the editable metadata form. Nothing commits until the user saves.
+  const cur = state.doc.getMetadata();
+  const v = await formModal('Suggested metadata (review)', [
+    { name: 'title', label: 'Title', value: proposal.title || cur.title || '' },
+    { name: 'author', label: 'Author', value: proposal.author || cur.author || '' },
+    { name: 'subject', label: 'Subject', value: proposal.subject || cur.subject || '' },
+    { name: 'keywords', label: 'Keywords', value: proposal.keywords || cur.keywords || '' },
+  ], { okLabel: 'Apply' });
+  if (v) { await dispatch('metadata.set', v); toast('Metadata applied', 'ok'); }
+}
+
+async function redactByDescription() {
+  if (!await ensureAi()) return;
+  const ask = await formModal('Redact by description', [{ name: 'description', label: 'What should be removed?', value: '' }], { okLabel: 'Find' });
+  if (!ask?.description) return;
+  let res;
+  try { res = await withBusy('Finding matches locally…', () => describeToRedact(state.doc, ask.description)); }
+  catch (e) { return toast('Could not analyze', 'err', { detail: e.message }); }
+  if (!res.regions.length) return toast('No matching text found', 'warn', { detail: res.patterns.length ? `patterns: ${res.patterns.join(', ')}` : '' });
+
+  // STAGE: show what would be removed; commit only on confirm.
+  const sample = res.regions.slice(0, 8).map(r => `p${r.page + 1}: ${r.text.slice(0, 40)}`).join('\n');
+  const ok = await confirmModal(`Found ${res.regions.length} match${res.regions.length > 1 ? 'es' : ''} to permanently redact:\n\n${sample}${res.regions.length > 8 ? '\n…' : ''}`, { title: 'Confirm redaction', okLabel: `Redact ${res.regions.length}`, danger: true });
+  if (!ok) return;
+  for (const r of res.regions) {
+    // Pad the box slightly so the whole glyph run is covered.
+    await dispatch('redact.region', { page: r.page, x: Math.max(0, r.x - 0.005), y: Math.max(0, r.y - 0.004), w: Math.min(1, r.w + 0.01), h: Math.min(1, r.h + 0.008) });
+  }
+  toast(`Redacted ${res.regions.length} region${res.regions.length > 1 ? 's' : ''}`, 'ok');
+}
+
+// Minimal busy overlay during a model call.
+async function withBusy(message, fn) {
+  const note = el('div', { text: message, style: 'position:fixed;bottom:46px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--panel-border);padding:8px 14px;border-radius:9px;z-index:70;box-shadow:var(--shadow-pop)' });
+  document.body.appendChild(note);
+  try { return await fn(); } finally { note.remove(); }
+}
+
+return { openSidecarMenu };
+})();
+
 /* ui/toolbar.js */
 const __m_ui_toolbar = (() => {
 // toolbar.js — the top chrome. Buttons dispatch through the runner (the same door
@@ -3687,6 +4078,7 @@ const setTool = __m_ui_annotate_tools.setTool;
 const currentTool = __m_ui_annotate_tools.currentTool;
 const toolSettings = __m_ui_annotate_tools.toolSettings;
 const openFormsDialog = __m_ui_formsdialog.openFormsDialog;
+const openSidecarMenu = __m_ui_sidecar_menu.openSidecarMenu;
 
 let bar = null;
 const need = [];   // buttons needing a document
@@ -3789,6 +4181,7 @@ function render(version) {
     (fname = el('div.fname', { text: '' })),
     el('div.sep'),
     el('div.group', {}, [
+      btn('ai', '', openSidecarMenu, { needsDoc: true }),
       btn(document.documentElement.getAttribute('data-theme') === 'light' ? 'moon' : 'sun', '', toggleTheme, { id: 'btn-theme' }),
       btn('settings', '', openSettings),
       btn('help', '', openHelp),
@@ -4031,6 +4424,7 @@ const undo = __m_core_runner.undo;
 const redo = __m_core_runner.redo;
 const refreshAgentFace = __m_core_agent.refreshAgentFace;
 const handleUrlMode = __m_core_agent.handleUrlMode;
+const initAi = __m_core_ai.init;
 
 const installErrorNet = __m_ui_toast.installErrorNet;
 const initToolbar = __m_ui_toolbar.initToolbar;
@@ -4118,6 +4512,9 @@ function boot() {
   wireKeyboard();
   refreshAgentFace();
   handleUrlMode();
+  // Detect the AI ladder in the background (probes localhost; quiet if nothing's there).
+  // The tool is fully usable before/without this — the no-AI ground floor.
+  initAi().catch(() => {});
 
   console.log('[sheaf] ready —', document.getElementById('app').dataset.version);
 }

@@ -35,6 +35,7 @@ const P = {
   forms:   '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>',
   sign:    '<path d="M3 19c3 0 4-12 7-12s1 9 3 9 2-4 5-4"/><path d="M3 21h18"/>',
   download:'<path d="M12 3v12M7 11l5 5 5-5"/><path d="M5 21h14"/>',
+  ai:      '<path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8z"/><path d="M18 14l.9 2.1L21 17l-2.1.9L18 20l-.9-2.1L15 17l2.1-.9z"/>',
 };
 
 export function icon(name) {

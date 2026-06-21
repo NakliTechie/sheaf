@@ -9,6 +9,7 @@ import { registerOps } from './ops/index.js';
 import { keyboard } from './core/keyboard.js';
 import { undo, redo } from './core/runner.js';
 import { refreshAgentFace, handleUrlMode } from './core/agent.js';
+import { init as initAi } from './core/ai.js';
 
 import { installErrorNet } from './ui/toast.js';
 import { initToolbar } from './ui/toolbar.js';
@@ -90,6 +91,9 @@ function boot() {
   wireKeyboard();
   refreshAgentFace();
   handleUrlMode();
+  // Detect the AI ladder in the background (probes localhost; quiet if nothing's there).
+  // The tool is fully usable before/without this — the no-AI ground floor.
+  initAi().catch(() => {});
 
   console.log('[sheaf] ready —', document.getElementById('app').dataset.version);
 }

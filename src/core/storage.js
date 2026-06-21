@@ -18,7 +18,7 @@ export const hasOPFS = typeof navigator !== 'undefined' && navigator.storage && 
 // ── IndexedDB (handles + signatures) ───────────────────────────────────────────
 
 const DB_NAME = 'sheaf';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 let _dbp = null;
 
 function db() {
@@ -29,12 +29,30 @@ function db() {
       const d = req.result;
       if (!d.objectStoreNames.contains('handles')) d.createObjectStore('handles', { keyPath: 'id' });
       if (!d.objectStoreNames.contains('signatures')) d.createObjectStore('signatures', { keyPath: 'id' });
+      if (!d.objectStoreNames.contains('aiconfig')) d.createObjectStore('aiconfig', { keyPath: 'id' });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
   return _dbp;
 }
+
+async function idbGet(store, id) {
+  const d = await db();
+  return new Promise((res, rej) => {
+    const tx = d.transaction(store, 'readonly');
+    const req = tx.objectStore(store).get(id);
+    req.onsuccess = () => res(req.result || null); req.onerror = () => rej(req.error);
+  });
+}
+
+// AI config (VaultMind BYOK). The endpoint/model + the API KEY live here, in the
+// user's own IndexedDB — never sent anywhere except, as an Authorization header, to the
+// endpoint the user themselves configured. There is no "our infra" — this is a static
+// file. Stored locally so the user doesn't re-enter it each session.
+export async function saveAiConfig(cfg) { return idbPut('aiconfig', { id: 'byok', ...cfg }); }
+export async function getAiConfig() { return idbGet('aiconfig', 'byok'); }
+export async function clearAiConfig() { return idbDelete('aiconfig', 'byok'); }
 
 async function idbPut(store, value) {
   const d = await db();
