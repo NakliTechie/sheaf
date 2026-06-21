@@ -1918,6 +1918,32 @@ const ops = [
       return { doc };
     },
   },
+
+  {
+    id: 'sign.image', label: 'Place signature image', group: 'sign', icon: 'sign',
+    description: 'Place a PNG/JPEG signature (drawn, uploaded, or from the library) at a point. width is a 0..1 fraction of the page; height follows the image aspect.',
+    agentCallable: false, // image bytes, browser-side
+    params: {
+      page: { type: 'int', required: true, min: 0 },
+      x: { type: 'number', required: true }, y: { type: 'number', required: true },
+      width: { type: 'number', default: 0.28, min: 0.02, max: 1 },
+      imageBytes: { type: 'bytes', required: true },
+    },
+    async run(doc, p) {
+      const count = doc.pageCount();
+      if (p.page < 0 || p.page >= count) throw new Error(`Page ${p.page} out of range`);
+      const u8 = p.imageBytes instanceof Uint8Array ? p.imageBytes : new Uint8Array(p.imageBytes);
+      const isPng = u8[0] === 0x89 && u8[1] === 0x50;
+      const img = isPng ? await doc.pdf.embedPng(u8) : await doc.pdf.embedJpg(u8);
+      const page = doc.pdf.getPages()[p.page];
+      const { width: W, height: H } = page.getSize();
+      const pw = p.width * W;
+      const ph = pw * (img.height / img.width);
+      // (x,y) is the top-left of the placement, normalized; pdf-lib draws from bottom-left.
+      page.drawImage(img, { x: p.x * W, y: H * (1 - p.y) - ph, width: pw, height: ph });
+      return { doc };
+    },
+  },
 ];
 
 return { ops };
@@ -2017,7 +2043,38 @@ const __m_ops_convert = (() => {
 const openForRender = __m_core_render.openForRender;
 const pageText = __m_core_render.pageText;
 
+function dataUrlToBytes(dataUrl) {
+  const bin = atob(dataUrl.slice(dataUrl.indexOf(',') + 1));
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8;
+}
+
 const ops = [
+  {
+    id: 'convert.pageImage', label: 'Page → image', group: 'convert', icon: 'image',
+    description: 'Render a page to a PNG or JPEG image (artifact). scale is the render resolution multiplier.',
+    agentCallable: false, mutates: false, // browser-only (canvas)
+    params: {
+      page: { type: 'int', required: true, min: 0 },
+      format: { type: 'string', default: 'png', enum: ['png', 'jpeg'] },
+      scale: { type: 'number', default: 2, min: 0.5, max: 5 },
+    },
+    async run(doc, { page, format, scale }) {
+      if (page < 0 || page >= doc.pageCount()) throw new Error(`Page ${page} out of range`);
+      const pdf = await openForRender(await doc.toBytes());
+      try {
+        const p = await pdf.getPage(page + 1);
+        const vp = p.getViewport({ scale });
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height);
+        await p.render({ canvasContext: canvas.getContext('2d'), viewport: vp, isEvalSupported: false }).promise;
+        const mime = format === 'jpeg' ? 'image/jpeg' : 'image/png';
+        const bytes = dataUrlToBytes(canvas.toDataURL(mime, format === 'jpeg' ? 0.92 : undefined));
+        return { artifact: { bytes, format, width: canvas.width, height: canvas.height } };
+      } finally { pdf.destroy?.(); }
+    },
+  },
   {
     id: 'convert.text', label: 'Extract text', group: 'convert', icon: 'textbox',
     description: 'Extract the document’s text, page by page, as a downloadable .txt artifact. Does not change the document.',
@@ -2195,6 +2252,109 @@ const ops = [
 return { ops };
 })();
 
+/* ops/images.js */
+const __m_ops_images = (() => {
+// ops/images.js — images → PDF. Embed PNG/JPEG images as pages (each image becomes a
+// page sized to the image). With a blank document this builds a PDF from images; with
+// an open document it inserts them. pdf-lib embeds losslessly; deterministic.
+
+const getEngine = __m_core_engines.getEngine;
+
+function lib() { return getEngine('pdf-lib'); }
+const isPng = (b) => b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47;
+const isJpg = (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff;
+
+const ops = [
+  {
+    id: 'pages.insertImages', label: 'Insert images as pages', group: 'page', icon: 'image',
+    description: 'Embed PNG/JPEG images as new pages (each page sized to its image). at = -1 appends.',
+    agentCallable: true,
+    params: {
+      images: { type: 'array', required: true, minItems: 1, items: { type: 'bytes' } },
+      at: { type: 'int', default: -1 },
+    },
+    async run(doc, { images, at }) {
+      const count = doc.pageCount();
+      let insertAt = at < 0 || at > count ? count : at;
+      for (const raw of images) {
+        const u8 = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+        let img;
+        if (isPng(u8)) img = await doc.pdf.embedPng(u8);
+        else if (isJpg(u8)) img = await doc.pdf.embedJpg(u8);
+        else throw new Error('Only PNG and JPEG images are supported');
+        const page = doc.pdf.insertPage(insertAt, [img.width, img.height]);
+        page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+        insertAt++;
+      }
+      return { doc };
+    },
+  },
+];
+
+return { ops };
+})();
+
+/* ops/compress.js */
+const __m_ops_compress = (() => {
+// ops/compress.js — reduce file size by rasterizing each page to JPEG and rebuilding.
+// This is the honest, pragmatic v1.0 compressor: it genuinely shrinks image-heavy and
+// scanned PDFs, but it FLATTENS the page to an image — selectable text is lost (run OCR
+// after if you need it back). Targeted image-XObject downsampling that preserves the
+// text layer is the v1.1 path (the roadmap's qpdf-wasm). Browser-only (render + canvas).
+
+const getEngine = __m_core_engines.getEngine;
+const openForRender = __m_core_render.openForRender;
+const SheafDoc = __m_core_doc.SheafDoc;
+
+function carry(src, out) {
+  const m = (g, s) => { try { const v = src[g](); if (v != null) out[s](v); } catch {} };
+  m('getTitle', 'setTitle'); m('getAuthor', 'setAuthor'); m('getSubject', 'setSubject');
+  m('getCreationDate', 'setCreationDate'); m('getModificationDate', 'setModificationDate');
+}
+
+function dataUrlToBytes(dataUrl) {
+  const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+  const bin = atob(b64);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8;
+}
+
+const ops = [
+  {
+    id: 'compress.rasterize', label: 'Compress (flatten to images)', group: 'compress', icon: 'compress',
+    description: 'Rasterize each page to JPEG and rebuild — genuinely shrinks scanned/image-heavy PDFs. LOSSY: selectable text is flattened away (run OCR after to restore searchability).',
+    agentCallable: false, // heavy + browser-only
+    params: {
+      quality: { type: 'number', default: 0.6, min: 0.1, max: 0.95 },
+      scale: { type: 'number', default: 1.5, min: 0.5, max: 4 },
+    },
+    async run(doc, { quality, scale }) {
+      const { PDFDocument } = getEngine('pdf-lib');
+      const srcPages = doc.pdf.getPages().map(p => p.getSize());
+      const pdf = await openForRender(await doc.toBytes());
+      const out = await PDFDocument.create();
+      carry(doc.pdf, out);
+      try {
+        for (let i = 0; i < pdf.numPages; i++) {
+          const page = await pdf.getPage(i + 1);
+          const vp = page.getViewport({ scale });
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height);
+          await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp, isEvalSupported: false }).promise;
+          const jpg = await out.embedJpg(dataUrlToBytes(canvas.toDataURL('image/jpeg', quality)));
+          const { width: W, height: H } = srcPages[i] || { width: vp.width, height: vp.height };
+          out.addPage([W, H]).drawImage(jpg, { x: 0, y: 0, width: W, height: H });
+        }
+      } finally { pdf.destroy?.(); }
+      return { doc: new SheafDoc(out, null) };
+    },
+  },
+];
+
+return { ops };
+})();
+
 /* ops/index.js */
 const __m_ops_index = (() => {
 // ops/index.js — the one place ops register into the registry. Importing a new op
@@ -2213,6 +2373,8 @@ const redactOps = __m_ops_redact.ops;
 const signOps = __m_ops_sign.ops;
 const convertOps = __m_ops_convert.ops;
 const ocrOps = __m_ops_ocr.ops;
+const imageOps = __m_ops_images.ops;
+const compressOps = __m_ops_compress.ops;
 
 function registerOps() {
   registerAll([
@@ -2227,6 +2389,8 @@ function registerOps() {
     ...signOps,
     ...convertOps,
     ...ocrOps,
+    ...imageOps,
+    ...compressOps,
   ]);
 }
 
@@ -3155,6 +3319,9 @@ const P = {
   openfolder:'<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 11h18"/>',
   copyfile:'<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M4 16V4a2 2 0 0 1 2-2h8"/><path d="M12 12v5M9.5 14.5h5"/>',
   chevdown:'<path d="M6 9l6 6 6-6"/>',
+  image:   '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>',
+  imgpdf:  '<rect x="3" y="3" width="14" height="14" rx="2"/><circle cx="7.5" cy="7.5" r="1.2"/><path d="M17 12l-4-4L6 15"/><path d="M14 17v4h7v-7h-4"/>',
+  compress:'<path d="M9 3v6M9 9l-3-3M9 9 6 12M15 21v-6M15 15l3 3M15 15l3-3"/><path d="M3 9h6v6H3zM15 9h6v6h-6z" fill="none"/>',
 };
 
 function icon(name) {
@@ -3795,6 +3962,216 @@ async function downloadCopy() {
 return { openSaveMenu };
 })();
 
+/* core/zip.js */
+const __m_core_zip = (() => {
+// zip.js — a minimal, dependency-free ZIP writer (STORE method, no compression). Page
+// images (PNG/JPEG) are already compressed, so storing them is fine and keeps this tiny.
+// Used to bundle a PDF→images export into one download instead of N save prompts.
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+  return t;
+})();
+function crc32(bytes) {
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+// files: [{ name, bytes:Uint8Array }] → a ZIP as Uint8Array.
+function makeZip(files) {
+  const enc = new TextEncoder();
+  const locals = [];
+  const central = [];
+  let offset = 0;
+
+  for (const f of files) {
+    const nameBytes = enc.encode(f.name);
+    const crc = crc32(f.bytes);
+    const size = f.bytes.length;
+
+    const local = new Uint8Array(30 + nameBytes.length + size);
+    const lv = new DataView(local.buffer);
+    lv.setUint32(0, 0x04034b50, true);   // local file header sig
+    lv.setUint16(4, 20, true);           // version needed
+    lv.setUint16(6, 0, true);            // flags
+    lv.setUint16(8, 0, true);            // method 0 = store
+    lv.setUint16(10, 0, true);           // mod time
+    lv.setUint16(12, 0, true);           // mod date
+    lv.setUint32(14, crc, true);
+    lv.setUint32(18, size, true);        // compressed size
+    lv.setUint32(22, size, true);        // uncompressed size
+    lv.setUint16(26, nameBytes.length, true);
+    lv.setUint16(28, 0, true);           // extra len
+    local.set(nameBytes, 30);
+    local.set(f.bytes, 30 + nameBytes.length);
+    locals.push(local);
+
+    const cd = new Uint8Array(46 + nameBytes.length);
+    const cv = new DataView(cd.buffer);
+    cv.setUint32(0, 0x02014b50, true);   // central dir sig
+    cv.setUint16(4, 20, true);           // version made by
+    cv.setUint16(6, 20, true);           // version needed
+    cv.setUint32(16, crc, true);
+    cv.setUint32(20, size, true);
+    cv.setUint32(24, size, true);
+    cv.setUint16(28, nameBytes.length, true);
+    cv.setUint32(42, offset, true);      // local header offset
+    cd.set(nameBytes, 46);
+    central.push(cd);
+
+    offset += local.length;
+  }
+
+  const centralSize = central.reduce((a, c) => a + c.length, 0);
+  const eocd = new Uint8Array(22);
+  const ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 0x06054b50, true);     // EOCD sig
+  ev.setUint16(8, files.length, true);   // entries this disk
+  ev.setUint16(10, files.length, true);  // total entries
+  ev.setUint32(12, centralSize, true);
+  ev.setUint32(16, offset, true);        // central dir offset
+
+  const total = offset + centralSize + 22;
+  const out = new Uint8Array(total);
+  let p = 0;
+  for (const l of locals) { out.set(l, p); p += l.length; }
+  for (const c of central) { out.set(c, p); p += c.length; }
+  out.set(eocd, p);
+  return out;
+}
+
+return { makeZip };
+})();
+
+/* ui/convertmenu.js */
+const __m_ui_convertmenu = (() => {
+// convertmenu.js — Convert / Export. Text, page images (single or all-as-zip),
+// images → PDF, and the lossy compressor. Browser-side ops (render/canvas); each
+// downloads or transforms locally.
+
+const el = __m_ui_dom.el;
+const openModal = __m_ui_modal.openModal;
+const confirmModal = __m_ui_modal.confirmModal;
+const formModal = __m_ui_modal.formModal;
+const state = __m_core_state.state;
+const dispatch = __m_core_runner.dispatch;
+const makeZip = __m_core_zip.makeZip;
+const downloadBytes = __m_core_storage.downloadBytes;
+const toast = __m_ui_toast.toast;
+
+function openConvertMenu() {
+  if (!state.doc) return;
+  let close;
+  const item = (label, desc, fn) => el('button', {
+    class: 'btn', style: 'justify-content:flex-start;width:100%;text-align:left;height:auto;padding:10px 12px;flex-direction:column;align-items:flex-start;gap:2px',
+    onClick: async () => { close(); await fn(); },
+  }, [el('span', { text: label, style: 'font-size:14px' }), el('span', { text: desc, style: 'font-size:12px;color:var(--fg-faint)' })]);
+
+  const content = ({ close: c }) => { close = c; return el('div', { style: 'display:flex;flex-direction:column;gap:6px' }, [
+    item('Extract text', 'Download the text layer as .txt', extractText),
+    item('Current page → image', 'Download this page as PNG or JPEG', currentPageImage),
+    item('All pages → images (zip)', 'Render every page and download a .zip', allPagesZip),
+    item('Images → PDF', 'Append PNG/JPEG images as new pages', imagesToPdf),
+    el('hr', { style: 'border:none;border-top:1px solid var(--panel-border);margin:4px 0' }),
+    item('Compress (flatten to images)', 'Shrink scanned/image PDFs — lossy, text becomes non-selectable', compress),
+  ]); };
+  return openModal({ title: 'Convert / Export', content, actions: [{ label: 'Close', value: true }] });
+}
+
+function baseName() { return (state.session.fileName || 'document').replace(/\.pdf$/i, ''); }
+
+async function extractText() {
+  try {
+    const res = await dispatch('convert.text', {}, { source: 'ui' });
+    const text = res.artifact?.text || '';
+    if (!text.trim()) return toast('No extractable text (try OCR for a scan)', 'warn');
+    downloadText(text, `${baseName()}.txt`);
+    toast('Text extracted', 'ok');
+  } catch (e) { toast('Could not extract text', 'err', { detail: e.message }); }
+}
+
+async function currentPageImage() {
+  const v = await formModal('Page → image', [
+    { name: 'format', label: 'Format', type: 'select', value: 'png', options: [{ value: 'png', label: 'PNG' }, { value: 'jpeg', label: 'JPEG' }] },
+  ]);
+  if (!v) return;
+  try {
+    const page = state.view.pageIndex;
+    const res = await dispatch('convert.pageImage', { page, format: v.format, scale: 2 }, { source: 'ui' });
+    downloadBytesAs(res.artifact.bytes, `${baseName()}-p${page + 1}.${v.format === 'jpeg' ? 'jpg' : 'png'}`, v.format === 'jpeg' ? 'image/jpeg' : 'image/png');
+    toast('Page exported', 'ok');
+  } catch (e) { toast('Export failed', 'err', { detail: e.message }); }
+}
+
+async function allPagesZip() {
+  const n = state.doc.pageCount();
+  if (!await confirmModal(`Render all ${n} page${n > 1 ? 's' : ''} to PNG and download a zip?`, { title: 'Export all pages', okLabel: 'Export' })) return;
+  const note = busy(`Rendering 0/${n}…`);
+  try {
+    const files = [];
+    for (let i = 0; i < n; i++) {
+      note.set(`Rendering ${i + 1}/${n}…`);
+      const res = await dispatch('convert.pageImage', { page: i, format: 'png', scale: 2 }, { source: 'ui' });
+      files.push({ name: `${baseName()}-p${String(i + 1).padStart(3, '0')}.png`, bytes: res.artifact.bytes });
+    }
+    downloadBytesAs(makeZip(files), `${baseName()}-pages.zip`, 'application/zip');
+    toast(`Exported ${n} pages`, 'ok');
+  } catch (e) { toast('Export failed', 'err', { detail: e.message }); }
+  finally { note.remove(); }
+}
+
+function imagesToPdf() {
+  const input = el('input', { type: 'file', accept: 'image/png,image/jpeg', multiple: 'true' });
+  input.onchange = async () => {
+    const imgs = [];
+    for (const f of input.files || []) imgs.push(new Uint8Array(await f.arrayBuffer()));
+    if (!imgs.length) return;
+    try { await dispatch('pages.insertImages', { images: imgs, at: -1 }); toast(`Added ${imgs.length} image page${imgs.length > 1 ? 's' : ''}`, 'ok'); }
+    catch (e) { toast('Could not insert images', 'err', { detail: e.message }); }
+  };
+  input.click();
+}
+
+async function compress() {
+  const v = await formModal('Compress (flatten to images)', [
+    { name: 'quality', label: 'JPEG quality (0.1–0.95)', type: 'number', value: 0.6 },
+  ]);
+  if (!v) return;
+  if (!await confirmModal('This rasterizes every page to JPEG — selectable text is flattened away (you can OCR afterward). Continue?', { title: 'Compress', okLabel: 'Compress', danger: true })) return;
+  const note = busy('Compressing…');
+  try {
+    const before = (await state.doc.toBytes()).length;
+    await dispatch('compress.rasterize', { quality: Math.max(0.1, Math.min(0.95, v.quality || 0.6)), scale: 1.5 }, { source: 'ui' });
+    const after = (await state.doc.toBytes()).length;
+    const pct = Math.round((1 - after / before) * 100);
+    toast(pct > 0 ? `Compressed ~${pct}% (${kb(before)} → ${kb(after)})` : `Re-encoded (${kb(after)})`, 'ok');
+  } catch (e) { toast('Compress failed', 'err', { detail: e.message }); }
+  finally { note.remove(); }
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────────────
+function kb(n) { return n > 1e6 ? (n / 1e6).toFixed(1) + ' MB' : Math.round(n / 1024) + ' KB'; }
+function downloadText(text, name) { downloadAnyBlob(new Blob([text], { type: 'text/plain' }), name); }
+function downloadBytesAs(bytes, name, mime) { downloadAnyBlob(new Blob([bytes], { type: mime }), name); }
+function downloadAnyBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = el('a', { href: url, download: name }); a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 8000);
+}
+function busy(msg) {
+  const label = el('div', { text: msg, style: 'font-size:13px' });
+  const ov = el('div', { style: 'position:fixed;inset:0;z-index:85;display:flex;align-items:center;justify-content:center;background:var(--overlay)' }, [
+    el('div', { style: 'background:var(--panel);border:1px solid var(--panel-border);border-radius:12px;padding:18px 24px;box-shadow:var(--shadow-pop)' }, [label]),
+  ]);
+  document.body.appendChild(ov);
+  return { set: (m) => { label.textContent = m; }, remove: () => ov.remove() };
+}
+
+return { openConvertMenu };
+})();
+
 /* ui/settings.js */
 const __m_ui_settings = (() => {
 // settings.js — the settings modal. Theme, default view mode, and the developer
@@ -3973,6 +4350,128 @@ async function addHeaderFooter() {
 return { openMarksMenu };
 })();
 
+/* ui/signature.js */
+const __m_ui_signature = (() => {
+// signature.js — the signature chooser. Type it, draw it, upload an image, or pick a
+// saved one. Drawn/uploaded signatures can be saved to a local library (IndexedDB —
+// the storage façade's signature store). Returns the chosen signature; the sign tool
+// places it. Resolves null on cancel.
+//
+//   { kind: 'text',  name, dateText }
+//   { kind: 'image', bytes }
+
+const el = __m_ui_dom.el;
+const clear = __m_ui_dom.clear;
+const openModal = __m_ui_modal.openModal;
+const storage = __m_core_storage;
+const toast = __m_ui_toast.toast;
+
+function chooseSignature() {
+  return openModal({ title: 'Signature', dismissable: true, content: build });
+}
+
+function build({ close }) {
+  const root = el('div', { style: 'display:flex;flex-direction:column;gap:12px;min-width:420px' });
+  const tabs = el('div', { style: 'display:flex;gap:4px' });
+  const panel = el('div');
+  let active = 'type';
+
+  const setTab = (name) => {
+    active = name;
+    for (const b of tabs.children) b.classList.toggle('active', b.dataset.tab === name);
+    clear(panel).append(PANELS[name](close));
+  };
+  for (const [name, label] of [['type', 'Type'], ['draw', 'Draw'], ['upload', 'Upload'], ['saved', 'Saved']]) {
+    tabs.append(el('button', { class: 'btn tool', dataset: { tab: name }, text: label, onClick: () => setTab(name) }));
+  }
+  root.append(tabs, panel);
+  setTab('type');
+  return root;
+}
+
+const PANELS = {
+  type(close) {
+    const name = el('input', { type: 'text', placeholder: 'Your name', style: 'width:100%' });
+    const withDate = el('input', { type: 'checkbox', checked: true, style: 'width:16px;height:16px' });
+    return el('div', { style: 'display:flex;flex-direction:column;gap:10px' }, [
+      el('label', {}, ['Signature', name]),
+      el('label', { style: 'flex-direction:row;align-items:center;gap:8px' }, [withDate, 'Include today’s date']),
+      el('div', { style: 'display:flex;justify-content:flex-end' }, [
+        el('button', { class: 'btn primary', onClick: () => { if (name.value.trim()) close({ kind: 'text', name: name.value.trim(), dateText: withDate.checked ? new Date().toLocaleDateString() : '' }); } }, ['Use']),
+      ]),
+    ]);
+  },
+
+  draw(close) {
+    const canvas = el('canvas', { width: 560, height: 180, style: 'width:100%;height:180px;background:var(--bg-sunken);border:1px solid var(--panel-border);border-radius:8px;touch-action:none;cursor:crosshair' });
+    const ctx = canvas.getContext('2d');
+    ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#111';
+    let drawing = false, last = null, dirty = false;
+    const pos = (e) => { const r = canvas.getBoundingClientRect(); return { x: (e.clientX - r.left) * (canvas.width / r.width), y: (e.clientY - r.top) * (canvas.height / r.height) }; };
+    canvas.addEventListener('pointerdown', (e) => { drawing = true; last = pos(e); canvas.setPointerCapture(e.pointerId); });
+    canvas.addEventListener('pointermove', (e) => { if (!drawing) return; const p = pos(e); ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke(); last = p; dirty = true; });
+    canvas.addEventListener('pointerup', () => { drawing = false; });
+    const save = el('input', { type: 'checkbox', style: 'width:16px;height:16px' });
+    return el('div', { style: 'display:flex;flex-direction:column;gap:10px' }, [
+      canvas,
+      el('div', { style: 'display:flex;align-items:center;justify-content:space-between' }, [
+        el('label', { style: 'flex-direction:row;align-items:center;gap:8px;font-size:13px' }, [save, 'Save to library']),
+        el('div', { style: 'display:flex;gap:8px' }, [
+          el('button', { class: 'btn', onClick: () => ctx.clearRect(0, 0, canvas.width, canvas.height) }, ['Clear']),
+          el('button', { class: 'btn primary', onClick: async () => { if (!dirty) return toast('Draw a signature first', 'warn'); const bytes = await canvasPng(canvas); if (save.checked) await persist(bytes); close({ kind: 'image', bytes }); } }, ['Use']),
+        ]),
+      ]),
+    ]);
+  },
+
+  upload(close) {
+    const input = el('input', { type: 'file', accept: 'image/png,image/jpeg' });
+    const save = el('input', { type: 'checkbox', style: 'width:16px;height:16px' });
+    return el('div', { style: 'display:flex;flex-direction:column;gap:10px' }, [
+      el('p', { text: 'Choose a PNG or JPEG of your signature (a transparent PNG looks best).', style: 'font-size:13px;color:var(--fg-muted)' }),
+      input,
+      el('label', { style: 'flex-direction:row;align-items:center;gap:8px;font-size:13px' }, [save, 'Save to library']),
+      el('div', { style: 'display:flex;justify-content:flex-end' }, [
+        el('button', { class: 'btn primary', onClick: async () => { const f = input.files?.[0]; if (!f) return toast('Pick an image', 'warn'); const bytes = new Uint8Array(await f.arrayBuffer()); if (save.checked) await persist(bytes); close({ kind: 'image', bytes }); } }, ['Use']),
+      ]),
+    ]);
+  },
+
+  saved(close) {
+    const grid = el('div', { style: 'display:grid;grid-template-columns:repeat(3,1fr);gap:8px;min-height:60px' });
+    const wrap = el('div', { style: 'display:flex;flex-direction:column;gap:8px' }, [grid]);
+    storage.listSignatures().then((sigs) => {
+      if (!sigs.length) { grid.append(el('div', { text: 'No saved signatures yet — draw or upload one and tick “Save to library”.', style: 'grid-column:1/-1;font-size:13px;color:var(--fg-faint)' })); return; }
+      for (const s of sigs) {
+        const url = URL.createObjectURL(new Blob([s.bytes], { type: 'image/png' }));
+        const cell = el('div', { style: 'position:relative;border:1px solid var(--panel-border);border-radius:6px;padding:4px;cursor:pointer;background:#fff', onClick: () => close({ kind: 'image', bytes: s.bytes }) }, [
+          el('img', { src: url, style: 'width:100%;height:48px;object-fit:contain' }),
+        ]);
+        cell.append(el('button', { class: 'btn danger', style: 'position:absolute;top:2px;right:2px;padding:0 5px;height:18px;font-size:11px', title: 'Delete', onClick: async (e) => { e.stopPropagation(); await storage.deleteSignature(s.id); cell.remove(); } }, ['×']));
+        grid.append(cell);
+      }
+    }).catch(() => {});
+    return wrap;
+  },
+};
+
+async function canvasPng(canvas) {
+  const url = canvas.toDataURL('image/png');
+  const bin = atob(url.slice(url.indexOf(',') + 1));
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8;
+}
+
+async function persist(bytes) {
+  const id = (crypto.randomUUID?.() || `sig-${Date.now()}`);
+  try { await storage.saveSignature({ id, kind: 'image', bytes, at: new Date().toISOString() }); toast('Saved to library', 'ok'); }
+  catch (e) { toast('Could not save', 'err', { detail: e.message }); }
+}
+
+return { chooseSignature };
+})();
+
 /* ui/annotate-tools.js */
 const __m_ui_annotate_tools = (() => {
 // annotate-tools.js — the interactive annotation layer. When a tool is active, a
@@ -3986,6 +4485,7 @@ const emit = __m_core_events.emit;
 const dispatch = __m_core_runner.dispatch;
 const el = __m_ui_dom.el;
 const formModal = __m_ui_modal.formModal;
+const chooseSignature = __m_ui_signature.chooseSignature;
 
 const DRAG_TOOLS = new Set(['highlight', 'rect', 'line', 'pencil', 'whiteout', 'redact']);
 const ALL_TOOLS = new Set([...DRAG_TOOLS, 'text', 'sign']);
@@ -4042,14 +4542,10 @@ async function onDown(e) {
 
   if (active === 'sign') {
     const at = normalize(rect, e.clientX, e.clientY);
-    const v = await formModal('Sign', [
-      { name: 'name', label: 'Signature (your name)', value: '' },
-      { name: 'withDate', label: 'Include date', type: 'select', value: 'yes', options: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }] },
-    ]);
-    if (v?.name) {
-      const dateText = v.withDate === 'yes' ? new Date().toLocaleDateString() : '';
-      dispatch('sign.place', { page, x: at.x, y: at.y, name: v.name, dateText, color: toolSettings.color });
-    }
+    const sig = await chooseSignature();
+    if (!sig) return;
+    if (sig.kind === 'text') dispatch('sign.place', { page, x: at.x, y: at.y, name: sig.name, dateText: sig.dateText, color: toolSettings.color });
+    else dispatch('sign.image', { page, x: at.x, y: at.y, width: 0.28, imageBytes: sig.bytes });
     return;
   }
 
@@ -4539,6 +5035,7 @@ const savePdfAs = __m_ui_fileops.savePdfAs;
 const mergePdf = __m_ui_fileops.mergePdf;
 const openFolder = __m_ui_fileops.openFolder;
 const openSaveMenu = __m_ui_savemenu.openSaveMenu;
+const openConvertMenu = __m_ui_convertmenu.openConvertMenu;
 const openSettings = __m_ui_settings.openSettings;
 const openHelp = __m_ui_help.openHelp;
 const openMarksMenu = __m_ui_marksmenu.openMarksMenu;
@@ -4632,7 +5129,7 @@ function render(version) {
       btn('mark', '', openMarksMenu, { needsDoc: true }),
       btn('forms', '', openFormsDialog, { needsDoc: true }),
       btn('ocr', '', openOcrMenu, { needsDoc: true }),
-      btn('download', '', exportText, { needsDoc: true }),
+      btn('download', '', openConvertMenu, { needsDoc: true, title: 'Convert / Export' }),
       btn('info', '', onMetadata, { needsDoc: true }),
     ]),
     el('div.sep'),
@@ -4704,20 +5201,6 @@ async function onMetadata() {
     { name: 'keywords', label: 'Keywords (comma-separated)', value: m.keywords || '' },
   ]);
   if (v) dispatch('metadata.set', v);
-}
-
-async function exportText() {
-  try {
-    const res = await dispatch('convert.text', {}, { source: 'ui' });
-    const text = res.artifact?.text || '';
-    if (!text.trim()) return toast('No extractable text (this may be a scanned PDF — try OCR)', 'warn');
-    const blob = new Blob([text], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = el('a', { href: url, download: (state.session.fileName || 'document').replace(/\.pdf$/i, '') + '.txt' });
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 8000);
-    toast('Text extracted', 'ok');
-  } catch (e) { toast('Could not extract text', 'err', { detail: e.message }); }
 }
 
 function toggleTheme() {

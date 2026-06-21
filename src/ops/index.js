@@ -14,6 +14,8 @@ import { ops as redactOps } from './redact.js';
 import { ops as signOps } from './sign.js';
 import { ops as convertOps } from './convert.js';
 import { ops as ocrOps } from './ocr.js';
+import { ops as imageOps } from './images.js';
+import { ops as compressOps } from './compress.js';
 
 export function registerOps() {
   registerAll([
@@ -28,5 +30,7 @@ export function registerOps() {
     ...signOps,
     ...convertOps,
     ...ocrOps,
+    ...imageOps,
+    ...compressOps,
   ]);
 }

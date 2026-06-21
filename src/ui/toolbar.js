@@ -13,6 +13,7 @@ import { confirmModal, formModal } from './modal.js';
 import { toast } from './toast.js';
 import { openPdf, newBlank, savePdf, savePdfAs, mergePdf, openFolder } from './fileops.js';
 import { openSaveMenu } from './savemenu.js';
+import { openConvertMenu } from './convertmenu.js';
 import { openSettings } from './settings.js';
 import { openHelp } from './help.js';
 import { openMarksMenu } from './marksmenu.js';
@@ -104,7 +105,7 @@ function render(version) {
       btn('mark', '', openMarksMenu, { needsDoc: true }),
       btn('forms', '', openFormsDialog, { needsDoc: true }),
       btn('ocr', '', openOcrMenu, { needsDoc: true }),
-      btn('download', '', exportText, { needsDoc: true }),
+      btn('download', '', openConvertMenu, { needsDoc: true, title: 'Convert / Export' }),
       btn('info', '', onMetadata, { needsDoc: true }),
     ]),
     el('div.sep'),
@@ -176,20 +177,6 @@ async function onMetadata() {
     { name: 'keywords', label: 'Keywords (comma-separated)', value: m.keywords || '' },
   ]);
   if (v) dispatch('metadata.set', v);
-}
-
-async function exportText() {
-  try {
-    const res = await dispatch('convert.text', {}, { source: 'ui' });
-    const text = res.artifact?.text || '';
-    if (!text.trim()) return toast('No extractable text (this may be a scanned PDF — try OCR)', 'warn');
-    const blob = new Blob([text], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = el('a', { href: url, download: (state.session.fileName || 'document').replace(/\.pdf$/i, '') + '.txt' });
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 8000);
-    toast('Text extracted', 'ok');
-  } catch (e) { toast('Could not extract text', 'err', { detail: e.message }); }
 }
 
 function toggleTheme() {

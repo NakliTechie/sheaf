@@ -8,6 +8,7 @@ import { on, emit } from '../core/events.js';
 import { dispatch } from '../core/runner.js';
 import { el } from './dom.js';
 import { formModal } from './modal.js';
+import { chooseSignature } from './signature.js';
 
 const DRAG_TOOLS = new Set(['highlight', 'rect', 'line', 'pencil', 'whiteout', 'redact']);
 const ALL_TOOLS = new Set([...DRAG_TOOLS, 'text', 'sign']);
@@ -64,14 +65,10 @@ async function onDown(e) {
 
   if (active === 'sign') {
     const at = normalize(rect, e.clientX, e.clientY);
-    const v = await formModal('Sign', [
-      { name: 'name', label: 'Signature (your name)', value: '' },
-      { name: 'withDate', label: 'Include date', type: 'select', value: 'yes', options: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }] },
-    ]);
-    if (v?.name) {
-      const dateText = v.withDate === 'yes' ? new Date().toLocaleDateString() : '';
-      dispatch('sign.place', { page, x: at.x, y: at.y, name: v.name, dateText, color: toolSettings.color });
-    }
+    const sig = await chooseSignature();
+    if (!sig) return;
+    if (sig.kind === 'text') dispatch('sign.place', { page, x: at.x, y: at.y, name: sig.name, dateText: sig.dateText, color: toolSettings.color });
+    else dispatch('sign.image', { page, x: at.x, y: at.y, width: 0.28, imageBytes: sig.bytes });
     return;
   }
 

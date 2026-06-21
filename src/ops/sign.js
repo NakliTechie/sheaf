@@ -41,4 +41,30 @@ export const ops = [
       return { doc };
     },
   },
+
+  {
+    id: 'sign.image', label: 'Place signature image', group: 'sign', icon: 'sign',
+    description: 'Place a PNG/JPEG signature (drawn, uploaded, or from the library) at a point. width is a 0..1 fraction of the page; height follows the image aspect.',
+    agentCallable: false, // image bytes, browser-side
+    params: {
+      page: { type: 'int', required: true, min: 0 },
+      x: { type: 'number', required: true }, y: { type: 'number', required: true },
+      width: { type: 'number', default: 0.28, min: 0.02, max: 1 },
+      imageBytes: { type: 'bytes', required: true },
+    },
+    async run(doc, p) {
+      const count = doc.pageCount();
+      if (p.page < 0 || p.page >= count) throw new Error(`Page ${p.page} out of range`);
+      const u8 = p.imageBytes instanceof Uint8Array ? p.imageBytes : new Uint8Array(p.imageBytes);
+      const isPng = u8[0] === 0x89 && u8[1] === 0x50;
+      const img = isPng ? await doc.pdf.embedPng(u8) : await doc.pdf.embedJpg(u8);
+      const page = doc.pdf.getPages()[p.page];
+      const { width: W, height: H } = page.getSize();
+      const pw = p.width * W;
+      const ph = pw * (img.height / img.width);
+      // (x,y) is the top-left of the placement, normalized; pdf-lib draws from bottom-left.
+      page.drawImage(img, { x: p.x * W, y: H * (1 - p.y) - ph, width: pw, height: ph });
+      return { doc };
+    },
+  },
 ];
