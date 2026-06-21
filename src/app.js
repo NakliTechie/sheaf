@@ -54,6 +54,7 @@ function wireKeyboard() {
     .register('d', () => setTool('pencil'), { context: 'viewer', label: 'Draw' })
     .register('t', () => setTool('text'), { context: 'viewer', label: 'Text box' })
     .register('w', () => setTool('whiteout'), { context: 'viewer', label: 'Whiteout' })
+    .register('x', () => setTool('redact'), { context: 'viewer', label: 'Redact' })
     .register('escape', () => setTool(null), { context: 'viewer' })
     .attach(window);
 }

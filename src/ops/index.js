@@ -10,6 +10,9 @@ import { ops as marksOps } from './marks.js';
 import { ops as annotateOps } from './annotate.js';
 import { ops as formsOps } from './forms.js';
 import { ops as textOps } from './text.js';
+import { ops as redactOps } from './redact.js';
+import { ops as signOps } from './sign.js';
+import { ops as convertOps } from './convert.js';
 
 export function registerOps() {
   registerAll([
@@ -20,5 +23,8 @@ export function registerOps() {
     ...annotateOps,
     ...formsOps,
     ...textOps,
+    ...redactOps,
+    ...signOps,
+    ...convertOps,
   ]);
 }

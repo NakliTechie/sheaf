@@ -9,8 +9,8 @@ import { dispatch } from '../core/runner.js';
 import { el } from './dom.js';
 import { formModal } from './modal.js';
 
-const DRAG_TOOLS = new Set(['highlight', 'rect', 'line', 'pencil', 'whiteout']);
-const ALL_TOOLS = new Set([...DRAG_TOOLS, 'text']);
+const DRAG_TOOLS = new Set(['highlight', 'rect', 'line', 'pencil', 'whiteout', 'redact']);
+const ALL_TOOLS = new Set([...DRAG_TOOLS, 'text', 'sign']);
 
 export const toolSettings = { color: '#ff3b30', highlightColor: '#ffe14d', thickness: 2 };
 
@@ -62,6 +62,19 @@ async function onDown(e) {
     return;
   }
 
+  if (active === 'sign') {
+    const at = normalize(rect, e.clientX, e.clientY);
+    const v = await formModal('Sign', [
+      { name: 'name', label: 'Signature (your name)', value: '' },
+      { name: 'withDate', label: 'Include date', type: 'select', value: 'yes', options: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }] },
+    ]);
+    if (v?.name) {
+      const dateText = v.withDate === 'yes' ? new Date().toLocaleDateString() : '';
+      dispatch('sign.place', { page, x: at.x, y: at.y, name: v.name, dateText, color: toolSettings.color });
+    }
+    return;
+  }
+
   e.preventDefault();
   const start = normalize(rect, e.clientX, e.clientY);
   gesture = { wrap, page, rect, start, cur: null, points: [start] };
@@ -87,10 +100,11 @@ function drawPreview() {
     return;
   }
   if (!cur) return;
-  if (active === 'highlight' || active === 'rect' || active === 'whiteout') {
+  if (active === 'highlight' || active === 'rect' || active === 'whiteout' || active === 'redact') {
     const x = Math.min(start.x, cur.x), y = Math.min(start.y, cur.y), w = Math.abs(cur.x - start.x), h = Math.abs(cur.y - start.y);
     const style = active === 'highlight' ? `background:${toolSettings.highlightColor};opacity:.4`
       : active === 'whiteout' ? `background:#fff;border:1px dashed #999`
+      : active === 'redact' ? `background:#000`
       : `border:2px solid ${toolSettings.color}`;
     preview.innerHTML = `<div style="position:absolute;left:${x * 100}%;top:${y * 100}%;width:${w * 100}%;height:${h * 100}%;${style}"></div>`;
   } else if (active === 'line') {
@@ -121,6 +135,11 @@ function onUp() {
     const x = Math.min(start.x, cur.x), y = Math.min(start.y, cur.y), w = Math.abs(cur.x - start.x), h = Math.abs(cur.y - start.y);
     if (w < 0.005 || h < 0.005) return;
     whiteoutRegion(page, x, y, w, h);
+  } else if (active === 'redact') {
+    if (!cur) return;
+    const x = Math.min(start.x, cur.x), y = Math.min(start.y, cur.y), w = Math.abs(cur.x - start.x), h = Math.abs(cur.y - start.y);
+    if (w < 0.005 || h < 0.005) return;
+    dispatch('redact.region', { page, x, y, w, h }); // true removal + black box
   }
 }
 

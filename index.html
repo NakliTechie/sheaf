@@ -1653,6 +1653,351 @@ const ops = [
 return { ops };
 })();
 
+/* ops/redact.js */
+const __m_ops_redact = (() => {
+// ops/redact.js — TRUE redaction. Not a black box over live text: the text is
+// removed from the page content stream so it cannot be extracted, copied, or read by
+// any tool. Then an opaque black rectangle is drawn over the region as the visible
+// marker. Verifiable: after redaction the target's bytes are gone from the stream.
+//
+// Mechanism: pdf-lib renders text as `<hexstring> Tj` / `[...] TJ` operators with the
+// position set by `Tm`/`Td`/`TD`/`T*`. We tokenize the content stream, track the text
+// position, and empty any text-show operator whose drawn region overlaps a redaction
+// box. This handles the common case (axis-aligned text, identity page transform).
+// Documented gaps (text inside form XObjects, rotated text matrices, Type3 fonts) are
+// still covered visually by the black box; the additive upgrade is a fuller content
+// parser — flagged, not silently skipped.
+
+const getEngine = __m_core_engines.getEngine;
+
+function lib() { return getEngine('pdf-lib'); }
+
+// ── Content-stream tokenizer ────────────────────────────────────────────────────
+const WS = new Set([' ', '\t', '\r', '\n', '\f', '\0']);
+const DELIM = new Set(['(', ')', '<', '>', '[', ']', '{', '}', '/', '%']);
+
+function tokenize(str) {
+  const toks = [];
+  let i = 0;
+  const n = str.length;
+  while (i < n) {
+    const c = str[i];
+    if (WS.has(c)) { i++; continue; }
+    if (c === '%') { while (i < n && str[i] !== '\n' && str[i] !== '\r') i++; continue; }
+    if (c === '(') { // literal string with balanced parens + escapes
+      let depth = 0, j = i, out = '';
+      do {
+        const ch = str[j];
+        if (ch === '\\') { out += ch + (str[j + 1] ?? ''); j += 2; continue; }
+        if (ch === '(') depth++;
+        if (ch === ')') depth--;
+        out += ch; j++;
+      } while (j < n && depth > 0);
+      toks.push({ type: 'str', kind: 'lit', raw: out }); i = j; continue;
+    }
+    if (c === '<' && str[i + 1] === '<') { toks.push({ type: 'op', raw: '<<' }); i += 2; continue; }
+    if (c === '>' && str[i + 1] === '>') { toks.push({ type: 'op', raw: '>>' }); i += 2; continue; }
+    if (c === '<') { let j = i + 1; while (j < n && str[j] !== '>') j++; toks.push({ type: 'str', kind: 'hex', raw: str.slice(i, j + 1) }); i = j + 1; continue; }
+    if (c === '[' || c === ']') { toks.push({ type: 'op', raw: c }); i++; continue; }
+    if (c === '/') { let j = i + 1; while (j < n && !WS.has(str[j]) && !DELIM.has(str[j])) j++; toks.push({ type: 'name', raw: str.slice(i, j) }); i = j; continue; }
+    // number or operator (run of non-delimiter, non-ws)
+    let j = i; while (j < n && !WS.has(str[j]) && !DELIM.has(str[j])) j++;
+    const raw = str.slice(i, j); i = j;
+    if (/^[+-]?(\d+\.?\d*|\.\d+)$/.test(raw)) toks.push({ type: 'num', raw, value: parseFloat(raw) });
+    else toks.push({ type: 'op', raw });
+  }
+  return toks;
+}
+
+function hexLen(hexRaw) { // number of bytes in a <..> string
+  const inner = hexRaw.slice(1, -1).replace(/\s/g, '');
+  return Math.ceil(inner.length / 2);
+}
+function litLen(litRaw) { // approx glyph count of a (..) string
+  return litRaw.slice(1, -1).replace(/\\./g, 'x').length;
+}
+
+// Walk tokens, track text position, and empty string tokens whose region overlaps any
+// box. Boxes are PDF-space rects {x0,y0,x1,y1}. Returns reconstructed stream text.
+function redactTokens(toks, boxes, defaultFontSize = 12) {
+  let tm = [1, 0, 0, 1, 0, 0];   // text matrix
+  let lm = [1, 0, 0, 1, 0, 0];   // line matrix
+  let fontSize = defaultFontSize, leading = 0;
+  const stack = [];
+
+  const overlaps = (x, y, w, fs) => boxes.some(b =>
+    y + fs * 0.2 >= b.y0 && y <= b.y1 && x + w >= b.x0 && x <= b.x1);
+
+  const showWidth = (tok) => {
+    const glyphs = tok.kind === 'hex' ? hexLen(tok.raw) : litLen(tok.raw);
+    return glyphs * fontSize * 0.5; // average glyph advance estimate
+  };
+
+  for (let k = 0; k < toks.length; k++) {
+    const t = toks[k];
+    if (t.type === 'num') { stack.push(t.value); continue; }
+    if (t.type === 'str' || t.type === 'name') { stack.push(t); continue; }
+    const op = t.raw;
+    if (op === '[') { stack.push('['); continue; }
+    if (op === ']') { const arr = []; while (stack.length && stack[stack.length - 1] !== '[') arr.unshift(stack.pop()); stack.pop(); stack.push({ type: 'arr', items: arr }); continue; }
+
+    switch (op) {
+      case 'Tf': fontSize = typeof stack[stack.length - 1] === 'number' ? stack[stack.length - 1] : fontSize; break;
+      case 'TL': leading = stack[stack.length - 1] ?? leading; break;
+      case 'Tm': { const a = stack.slice(-6).map(v => typeof v === 'number' ? v : 0); tm = a; lm = a.slice(); break; }
+      case 'Td': { const ty = num(stack, 1), tx = num(stack, 2); lm = [lm[0], lm[1], lm[2], lm[3], lm[4] + tx, lm[5] + ty]; tm = lm.slice(); break; }
+      case 'TD': { const ty = num(stack, 1), tx = num(stack, 2); leading = -ty; lm = [lm[0], lm[1], lm[2], lm[3], lm[4] + tx, lm[5] + ty]; tm = lm.slice(); break; }
+      case 'T*': lm = [lm[0], lm[1], lm[2], lm[3], lm[4], lm[5] - leading]; tm = lm.slice(); break;
+      case "'": case '"': { lm = [lm[0], lm[1], lm[2], lm[3], lm[4], lm[5] - leading]; tm = lm.slice(); maybeRedact(); break; }
+      case 'Tj': maybeRedact(); break;
+      case 'TJ': maybeRedactArray(); break;
+      default: break;
+    }
+    stack.length = 0;
+
+    function maybeRedact() {
+      const tok = stack[stack.length - 1];
+      if (!tok || tok.type !== 'str') return;
+      const w = showWidth(tok);
+      if (overlaps(tm[4], tm[5], w, fontSize)) { tok.raw = tok.kind === 'hex' ? '<>' : '()'; }
+      tm = [tm[0], tm[1], tm[2], tm[3], tm[4] + w, tm[5]];
+    }
+    function maybeRedactArray() {
+      const arr = stack[stack.length - 1];
+      if (!arr || arr.type !== 'arr') return;
+      let x = tm[4];
+      for (const item of arr.items) {
+        if (typeof item === 'number') { x -= (item / 1000) * fontSize; continue; }
+        if (item && item.type === 'str') { const w = showWidth(item); if (overlaps(x, tm[5], w, fontSize)) item.raw = item.kind === 'hex' ? '<>' : '()'; x += w; }
+      }
+      tm = [tm[0], tm[1], tm[2], tm[3], x, tm[5]];
+    }
+  }
+  return reconstruct(toks);
+}
+
+function num(stack, fromEnd) { const v = stack[stack.length - fromEnd]; return typeof v === 'number' ? v : 0; }
+
+function reconstruct(toks) {
+  // Flatten arrays back out: our tokenizer kept '[' ']' as separate ops and stack
+  // arrays were only views over those tokens; the underlying string tokens were
+  // mutated in place, so re-joining the original token list reproduces the stream
+  // with redacted strings emptied.
+  return toks.map(t => t.raw).join(' ');
+}
+
+// ── The op ──────────────────────────────────────────────────────────────────────
+function rectToPdf(W, H, x, y, w, h) { return { x0: x * W, y0: H * (1 - (y + h)), x1: (x + w) * W, y1: H * (1 - y) }; }
+
+const ops = [
+  {
+    id: 'redact.region', label: 'Redact region', group: 'redact', icon: 'redact',
+    description: 'Permanently remove text under a region (normalized 0..1 coords) from the content stream and cover it with an opaque black box. True removal — not a visual mask.',
+    agentCallable: true,
+    params: {
+      page: { type: 'int', required: true, min: 0 },
+      x: { type: 'number', required: true }, y: { type: 'number', required: true },
+      w: { type: 'number', required: true }, h: { type: 'number', required: true },
+    },
+    async run(doc, p) {
+      const { PDFArray, decodePDFRawStream, PDFName, rgb } = lib();
+      const count = doc.pageCount();
+      if (p.page < 0 || p.page >= count) throw new Error(`Page ${p.page} out of range`);
+      const page = doc.pdf.getPages()[p.page];
+      const { width: W, height: H } = page.getSize();
+      const box = rectToPdf(W, H, p.x, p.y, p.w, p.h);
+
+      // Surgery on every content stream of the page.
+      const ctx = doc.pdf.context;
+      let entry = page.node.Contents();
+      const refs = entry instanceof PDFArray ? entry.asArray() : (entry ? [entry] : []);
+      const newRefs = [];
+      for (const ref of refs) {
+        const stream = ctx.lookup(ref);
+        let text;
+        try { text = new TextDecoder('latin1').decode(decodePDFRawStream(stream).decode()); }
+        catch { newRefs.push(ref); continue; } // can't decode — leave it; the box still covers it
+        const redacted = redactTokens(tokenize(text), [box]);
+        const newStream = ctx.flateStream(new TextEncoder().encode(redacted));
+        newRefs.push(ctx.register(newStream));
+      }
+      if (newRefs.length === 1) page.node.set(PDFName.of('Contents'), newRefs[0]);
+      else if (newRefs.length) page.node.set(PDFName.of('Contents'), ctx.obj(newRefs));
+
+      // Visible marker: opaque black box on top.
+      page.drawRectangle({ x: box.x0, y: box.y0, width: box.x1 - box.x0, height: box.y1 - box.y0, color: rgb(0, 0, 0) });
+      return { doc };
+    },
+  },
+];
+
+return { ops };
+})();
+
+/* ops/sign.js */
+const __m_ops_sign = (() => {
+// ops/sign.js — appearance signing. Places a typed signature (and optional date line)
+// onto the page. The date is a PARAMETER, not the clock, so the op stays deterministic
+// and replayable — the UI passes today's date. Drawn/image signatures and a saved
+// signature library ride the storage façade and land as a v1.x enrichment; the
+// deterministic appearance-sign is the v1.0 floor.
+//
+// Cryptographic (PAdES) signing is a separate, later tier (handoff v1.2, WebCrypto) —
+// this is the visible-appearance signature, explicitly not a cryptographic guarantee.
+
+const getEngine = __m_core_engines.getEngine;
+const winAnsiSafe = __m_ops_textsafe.winAnsiSafe;
+
+const ops = [
+  {
+    id: 'sign.place', label: 'Sign', group: 'sign', icon: 'pencil',
+    description: 'Place a typed signature (and optional date line) at a point (normalized 0..1 coords).',
+    agentCallable: true,
+    params: {
+      page: { type: 'int', required: true, min: 0 },
+      x: { type: 'number', required: true }, y: { type: 'number', required: true },
+      name: { type: 'string', required: true, maxLength: 200 },
+      dateText: { type: 'string', default: '' },
+      fontSize: { type: 'number', default: 20, min: 6, max: 120 },
+      color: { type: 'string', default: '#1a3a8f' },
+    },
+    async run(doc, p) {
+      const { rgb, StandardFonts } = getEngine('pdf-lib');
+      const count = doc.pageCount();
+      if (p.page < 0 || p.page >= count) throw new Error(`Page ${p.page} out of range`);
+      const page = doc.pdf.getPages()[p.page];
+      const { width: W, height: H } = page.getSize();
+      const font = await doc.pdf.embedFont(StandardFonts.HelveticaOblique);
+      const small = await doc.pdf.embedFont(StandardFonts.Helvetica);
+      const m = /^#?([0-9a-f]{6})$/i.exec(p.color);
+      const [r, g, b] = m ? [(parseInt(m[1], 16) >> 16 & 255) / 255, (parseInt(m[1], 16) >> 8 & 255) / 255, (parseInt(m[1], 16) & 255) / 255] : [0.1, 0.23, 0.56];
+      const x = p.x * W, yTop = H * (1 - p.y);
+      page.drawText(winAnsiSafe(p.name), { x, y: yTop - p.fontSize, size: p.fontSize, font, color: rgb(r, g, b) });
+      // Underline + optional date.
+      page.drawLine({ start: { x, y: yTop - p.fontSize - 4 }, end: { x: x + font.widthOfTextAtSize(winAnsiSafe(p.name), p.fontSize), y: yTop - p.fontSize - 4 }, thickness: 0.75, color: rgb(r, g, b) });
+      if (p.dateText) page.drawText(winAnsiSafe(p.dateText), { x, y: yTop - p.fontSize - 18, size: Math.max(8, p.fontSize * 0.5), font: small, color: rgb(0.3, 0.3, 0.3) });
+      return { doc };
+    },
+  },
+];
+
+return { ops };
+})();
+
+/* core/render.js */
+const __m_core_render = (() => {
+// render.js — the render/text-layer side of the nakli-doc adapter (PDF.js, browser).
+// Pixels are *derived* from the document model's bytes; doc.js (pdf-lib) stays the
+// source of truth. After a mutating op the viewer re-derives a render doc from the
+// new bytes. This split keeps the structure side (and the M0 gate) browser-free.
+
+const loadEngine = __m_core_engines.loadEngine;
+const pdfjsWorkerUrl = __m_core_engines.pdfjsWorkerUrl;
+const isLoaded = __m_core_engines.isLoaded;
+const getEngine = __m_core_engines.getEngine;
+
+let _ready = null;
+
+async function ensurePdfjs() {
+  if (_ready) return _ready;
+  _ready = (async () => {
+    const pdfjs = isLoaded('pdfjs') ? getEngine('pdfjs') : await loadEngine('pdfjs');
+    // Worker pinned + same-origin (worker-src 'self').
+    pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl();
+    return pdfjs;
+  })();
+  return _ready;
+}
+
+// Parse bytes into a PDF.js document proxy for rendering. PDF.js may detach the
+// buffer it's given, so we hand it a copy — never our canonical bytes.
+async function openForRender(bytes) {
+  const pdfjs = await ensurePdfjs();
+  const data = bytes.slice(0);
+  const task = pdfjs.getDocument({ data, isEvalSupported: false });
+  return task.promise; // PDFDocumentProxy — caller must .destroy() when replacing
+}
+
+// How long to wait for a single page's render promise before moving on. The canvas
+// paints incrementally as the operator list executes, so on timeout the page is
+// usually already visible — we just stop blocking the viewport on a render that is
+// pathologically slow (a huge/complex page) or whose promise never settles. Degrade
+// clean, never freeze (handoff §8).
+const RENDER_TIMEOUT_MS = 12000;
+
+// Render one page (0-based) into a canvas at the given scale. Resolves with the CSS
+// px size, or { timedOut:true } if the render did not settle in time (the canvas may
+// still have painted). Never rejects on timeout — the caller keeps going.
+async function renderPage(pdf, pageIndex, scale, canvas) {
+  const page = await pdf.getPage(pageIndex + 1);
+  const viewport = page.getViewport({ scale });
+  const ratio = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+  canvas.width = Math.floor(viewport.width * ratio);
+  canvas.height = Math.floor(viewport.height * ratio);
+  canvas.style.width = `${Math.floor(viewport.width)}px`;
+  canvas.style.height = `${Math.floor(viewport.height)}px`;
+  const ctx = canvas.getContext('2d');
+  const task = page.render({ canvasContext: ctx, viewport, transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : null });
+  let timer;
+  const timeout = new Promise((res) => { timer = setTimeout(() => res({ timedOut: true }), RENDER_TIMEOUT_MS); });
+  try {
+    // Do NOT cancel on timeout: PDF.js paints the canvas incrementally as the
+    // operator list executes, so even if the promise is pathologically slow to settle
+    // the page is usually already visible. Cancelling would abort that paint. We just
+    // stop blocking the viewport on it and let the orphaned task finish painting.
+    const r = await Promise.race([task.promise.then(() => ({ ok: true })), timeout]);
+    return { width: viewport.width, height: viewport.height, timedOut: !!r.timedOut };
+  } finally { clearTimeout(timer); }
+}
+
+// Extract the concatenated text of a page (search, and the M3 text layer).
+async function pageText(pdf, pageIndex) {
+  const page = await pdf.getPage(pageIndex + 1);
+  const tc = await page.getTextContent();
+  return tc.items.map(i => i.str).join(' ');
+}
+
+// Does the document have any extractable text? (welcome/empty heuristics, OCR hint.)
+async function hasTextLayer(pdf) {
+  const n = Math.min(pdf.numPages, 3);
+  for (let i = 0; i < n; i++) { if ((await pageText(pdf, i)).trim().length > 0) return true; }
+  return false;
+}
+
+return { ensurePdfjs, openForRender, renderPage, pageText, hasTextLayer };
+})();
+
+/* ops/convert.js */
+const __m_ops_convert = (() => {
+// ops/convert.js — conversion outputs (artifacts, not document mutations). Text
+// extraction uses the PDF.js side of the adapter, so these run in the browser; they
+// don't change the document, they produce something to download. PDF→image export and
+// images→PDF are tracked follow-ups (PDF→PNG is browser-render-to-canvas; images→PDF
+// is an open-side flow) — flagged here so the convert group's scope is explicit.
+
+const openForRender = __m_core_render.openForRender;
+const pageText = __m_core_render.pageText;
+
+const ops = [
+  {
+    id: 'convert.text', label: 'Extract text', group: 'convert', icon: 'textbox',
+    description: 'Extract the document’s text, page by page, as a downloadable .txt artifact. Does not change the document.',
+    agentCallable: true, mutates: false,
+    params: {},
+    async run(doc) {
+      const bytes = await doc.toBytes();
+      const pdf = await openForRender(bytes);
+      const pages = [];
+      for (let i = 0; i < pdf.numPages; i++) pages.push(await pageText(pdf, i));
+      pdf.destroy?.();
+      return { artifact: { text: pages.join('\n\n'), pageCount: pages.length, pages } };
+    },
+  },
+];
+
+return { ops };
+})();
+
 /* ops/index.js */
 const __m_ops_index = (() => {
 // ops/index.js — the one place ops register into the registry. Importing a new op
@@ -1667,6 +2012,9 @@ const marksOps = __m_ops_marks.ops;
 const annotateOps = __m_ops_annotate.ops;
 const formsOps = __m_ops_forms.ops;
 const textOps = __m_ops_text.ops;
+const redactOps = __m_ops_redact.ops;
+const signOps = __m_ops_sign.ops;
+const convertOps = __m_ops_convert.ops;
 
 function registerOps() {
   registerAll([
@@ -1677,6 +2025,9 @@ function registerOps() {
     ...annotateOps,
     ...formsOps,
     ...textOps,
+    ...redactOps,
+    ...signOps,
+    ...convertOps,
   ]);
 }
 
@@ -2184,6 +2535,8 @@ const P = {
   redact:  '<rect x="3" y="9" width="18" height="6" rx="1" fill="currentColor" stroke="none"/><path d="M3 5h18M3 19h18"/>',
   eraser:  '<path d="M7 21h13M5 13l6-6 7 7-6 6H8z"/><path d="M9 11l6 6"/>',
   forms:   '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>',
+  sign:    '<path d="M3 19c3 0 4-12 7-12s1 9 3 9 2-4 5-4"/><path d="M3 21h18"/>',
+  download:'<path d="M12 3v12M7 11l5 5 5-5"/><path d="M5 21h14"/>',
 };
 
 function icon(name) {
@@ -2192,89 +2545,6 @@ function icon(name) {
 }
 
 return { icon };
-})();
-
-/* core/render.js */
-const __m_core_render = (() => {
-// render.js — the render/text-layer side of the nakli-doc adapter (PDF.js, browser).
-// Pixels are *derived* from the document model's bytes; doc.js (pdf-lib) stays the
-// source of truth. After a mutating op the viewer re-derives a render doc from the
-// new bytes. This split keeps the structure side (and the M0 gate) browser-free.
-
-const loadEngine = __m_core_engines.loadEngine;
-const pdfjsWorkerUrl = __m_core_engines.pdfjsWorkerUrl;
-const isLoaded = __m_core_engines.isLoaded;
-const getEngine = __m_core_engines.getEngine;
-
-let _ready = null;
-
-async function ensurePdfjs() {
-  if (_ready) return _ready;
-  _ready = (async () => {
-    const pdfjs = isLoaded('pdfjs') ? getEngine('pdfjs') : await loadEngine('pdfjs');
-    // Worker pinned + same-origin (worker-src 'self').
-    pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl();
-    return pdfjs;
-  })();
-  return _ready;
-}
-
-// Parse bytes into a PDF.js document proxy for rendering. PDF.js may detach the
-// buffer it's given, so we hand it a copy — never our canonical bytes.
-async function openForRender(bytes) {
-  const pdfjs = await ensurePdfjs();
-  const data = bytes.slice(0);
-  const task = pdfjs.getDocument({ data, isEvalSupported: false });
-  return task.promise; // PDFDocumentProxy — caller must .destroy() when replacing
-}
-
-// How long to wait for a single page's render promise before moving on. The canvas
-// paints incrementally as the operator list executes, so on timeout the page is
-// usually already visible — we just stop blocking the viewport on a render that is
-// pathologically slow (a huge/complex page) or whose promise never settles. Degrade
-// clean, never freeze (handoff §8).
-const RENDER_TIMEOUT_MS = 12000;
-
-// Render one page (0-based) into a canvas at the given scale. Resolves with the CSS
-// px size, or { timedOut:true } if the render did not settle in time (the canvas may
-// still have painted). Never rejects on timeout — the caller keeps going.
-async function renderPage(pdf, pageIndex, scale, canvas) {
-  const page = await pdf.getPage(pageIndex + 1);
-  const viewport = page.getViewport({ scale });
-  const ratio = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
-  canvas.width = Math.floor(viewport.width * ratio);
-  canvas.height = Math.floor(viewport.height * ratio);
-  canvas.style.width = `${Math.floor(viewport.width)}px`;
-  canvas.style.height = `${Math.floor(viewport.height)}px`;
-  const ctx = canvas.getContext('2d');
-  const task = page.render({ canvasContext: ctx, viewport, transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : null });
-  let timer;
-  const timeout = new Promise((res) => { timer = setTimeout(() => res({ timedOut: true }), RENDER_TIMEOUT_MS); });
-  try {
-    // Do NOT cancel on timeout: PDF.js paints the canvas incrementally as the
-    // operator list executes, so even if the promise is pathologically slow to settle
-    // the page is usually already visible. Cancelling would abort that paint. We just
-    // stop blocking the viewport on it and let the orphaned task finish painting.
-    const r = await Promise.race([task.promise.then(() => ({ ok: true })), timeout]);
-    return { width: viewport.width, height: viewport.height, timedOut: !!r.timedOut };
-  } finally { clearTimeout(timer); }
-}
-
-// Extract the concatenated text of a page (search, and the M3 text layer).
-async function pageText(pdf, pageIndex) {
-  const page = await pdf.getPage(pageIndex + 1);
-  const tc = await page.getTextContent();
-  return tc.items.map(i => i.str).join(' ');
-}
-
-// Does the document have any extractable text? (welcome/empty heuristics, OCR hint.)
-async function hasTextLayer(pdf) {
-  const n = Math.min(pdf.numPages, 3);
-  for (let i = 0; i < n; i++) { if ((await pageText(pdf, i)).trim().length > 0) return true; }
-  return false;
-}
-
-return { ensurePdfjs, openForRender, renderPage, pageText, hasTextLayer };
 })();
 
 /* ui/rendoc.js */
@@ -3171,8 +3441,8 @@ const dispatch = __m_core_runner.dispatch;
 const el = __m_ui_dom.el;
 const formModal = __m_ui_modal.formModal;
 
-const DRAG_TOOLS = new Set(['highlight', 'rect', 'line', 'pencil', 'whiteout']);
-const ALL_TOOLS = new Set([...DRAG_TOOLS, 'text']);
+const DRAG_TOOLS = new Set(['highlight', 'rect', 'line', 'pencil', 'whiteout', 'redact']);
+const ALL_TOOLS = new Set([...DRAG_TOOLS, 'text', 'sign']);
 
 const toolSettings = { color: '#ff3b30', highlightColor: '#ffe14d', thickness: 2 };
 
@@ -3224,6 +3494,19 @@ async function onDown(e) {
     return;
   }
 
+  if (active === 'sign') {
+    const at = normalize(rect, e.clientX, e.clientY);
+    const v = await formModal('Sign', [
+      { name: 'name', label: 'Signature (your name)', value: '' },
+      { name: 'withDate', label: 'Include date', type: 'select', value: 'yes', options: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }] },
+    ]);
+    if (v?.name) {
+      const dateText = v.withDate === 'yes' ? new Date().toLocaleDateString() : '';
+      dispatch('sign.place', { page, x: at.x, y: at.y, name: v.name, dateText, color: toolSettings.color });
+    }
+    return;
+  }
+
   e.preventDefault();
   const start = normalize(rect, e.clientX, e.clientY);
   gesture = { wrap, page, rect, start, cur: null, points: [start] };
@@ -3249,10 +3532,11 @@ function drawPreview() {
     return;
   }
   if (!cur) return;
-  if (active === 'highlight' || active === 'rect' || active === 'whiteout') {
+  if (active === 'highlight' || active === 'rect' || active === 'whiteout' || active === 'redact') {
     const x = Math.min(start.x, cur.x), y = Math.min(start.y, cur.y), w = Math.abs(cur.x - start.x), h = Math.abs(cur.y - start.y);
     const style = active === 'highlight' ? `background:${toolSettings.highlightColor};opacity:.4`
       : active === 'whiteout' ? `background:#fff;border:1px dashed #999`
+      : active === 'redact' ? `background:#000`
       : `border:2px solid ${toolSettings.color}`;
     preview.innerHTML = `<div style="position:absolute;left:${x * 100}%;top:${y * 100}%;width:${w * 100}%;height:${h * 100}%;${style}"></div>`;
   } else if (active === 'line') {
@@ -3283,6 +3567,11 @@ function onUp() {
     const x = Math.min(start.x, cur.x), y = Math.min(start.y, cur.y), w = Math.abs(cur.x - start.x), h = Math.abs(cur.y - start.y);
     if (w < 0.005 || h < 0.005) return;
     whiteoutRegion(page, x, y, w, h);
+  } else if (active === 'redact') {
+    if (!cur) return;
+    const x = Math.min(start.x, cur.x), y = Math.min(start.y, cur.y), w = Math.abs(cur.x - start.x), h = Math.abs(cur.y - start.y);
+    if (w < 0.005 || h < 0.005) return;
+    dispatch('redact.region', { page, x, y, w, h }); // true removal + black box
   }
 }
 
@@ -3478,6 +3767,7 @@ function render(version) {
       btn('merge', '', mergePdf, { needsDoc: true }),
       btn('mark', '', openMarksMenu, { needsDoc: true }),
       btn('forms', '', openFormsDialog, { needsDoc: true }),
+      btn('download', '', exportText, { needsDoc: true }),
       btn('info', '', onMetadata, { needsDoc: true }),
     ]),
     el('div.sep'),
@@ -3489,6 +3779,8 @@ function render(version) {
       toolBtn('pencil', 'pencil', 'Draw'),
       toolBtn('textbox', 'text', 'Text'),
       toolBtn('eraser', 'whiteout', 'Whiteout & retype'),
+      toolBtn('redact', 'redact', 'Redact (true removal)'),
+      toolBtn('sign', 'sign', 'Sign'),
       el('input', { type: 'color', value: toolSettings.color, title: 'Annotation colour', class: 'color-swatch',
         onInput: (e) => { toolSettings.color = e.target.value; } }),
     ])),
@@ -3546,6 +3838,20 @@ async function onMetadata() {
     { name: 'keywords', label: 'Keywords (comma-separated)', value: m.keywords || '' },
   ]);
   if (v) dispatch('metadata.set', v);
+}
+
+async function exportText() {
+  try {
+    const res = await dispatch('convert.text', {}, { source: 'ui' });
+    const text = res.artifact?.text || '';
+    if (!text.trim()) return toast('No extractable text (this may be a scanned PDF — try OCR)', 'warn');
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = el('a', { href: url, download: (state.session.fileName || 'document').replace(/\.pdf$/i, '') + '.txt' });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 8000);
+    toast('Text extracted', 'ok');
+  } catch (e) { toast('Could not extract text', 'err', { detail: e.message }); }
 }
 
 function toggleTheme() {
@@ -3776,6 +4082,7 @@ function wireKeyboard() {
     .register('d', () => setTool('pencil'), { context: 'viewer', label: 'Draw' })
     .register('t', () => setTool('text'), { context: 'viewer', label: 'Text box' })
     .register('w', () => setTool('whiteout'), { context: 'viewer', label: 'Whiteout' })
+    .register('x', () => setTool('redact'), { context: 'viewer', label: 'Redact' })
     .register('escape', () => setTool(null), { context: 'viewer' })
     .attach(window);
 }

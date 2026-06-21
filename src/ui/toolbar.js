@@ -97,6 +97,7 @@ function render(version) {
       btn('merge', '', mergePdf, { needsDoc: true }),
       btn('mark', '', openMarksMenu, { needsDoc: true }),
       btn('forms', '', openFormsDialog, { needsDoc: true }),
+      btn('download', '', exportText, { needsDoc: true }),
       btn('info', '', onMetadata, { needsDoc: true }),
     ]),
     el('div.sep'),
@@ -108,6 +109,8 @@ function render(version) {
       toolBtn('pencil', 'pencil', 'Draw'),
       toolBtn('textbox', 'text', 'Text'),
       toolBtn('eraser', 'whiteout', 'Whiteout & retype'),
+      toolBtn('redact', 'redact', 'Redact (true removal)'),
+      toolBtn('sign', 'sign', 'Sign'),
       el('input', { type: 'color', value: toolSettings.color, title: 'Annotation colour', class: 'color-swatch',
         onInput: (e) => { toolSettings.color = e.target.value; } }),
     ])),
@@ -165,6 +168,20 @@ async function onMetadata() {
     { name: 'keywords', label: 'Keywords (comma-separated)', value: m.keywords || '' },
   ]);
   if (v) dispatch('metadata.set', v);
+}
+
+async function exportText() {
+  try {
+    const res = await dispatch('convert.text', {}, { source: 'ui' });
+    const text = res.artifact?.text || '';
+    if (!text.trim()) return toast('No extractable text (this may be a scanned PDF — try OCR)', 'warn');
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = el('a', { href: url, download: (state.session.fileName || 'document').replace(/\.pdf$/i, '') + '.txt' });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 8000);
+    toast('Text extracted', 'ok');
+  } catch (e) { toast('Could not extract text', 'err', { detail: e.message }); }
 }
 
 function toggleTheme() {

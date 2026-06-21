@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Single-HTML-file browser-native PDF editor. Bench suite, tool 1 of 5.",
   "scripts": {
-    "test": "node test/m0-replay.mjs && node test/marks.mjs && node test/annotate.mjs && node test/forms.mjs",
+    "test": "node test/m0-replay.mjs && node test/marks.mjs && node test/annotate.mjs && node test/forms.mjs && node test/redact.mjs && node test/sign.mjs",
     "build": "node build/inline.mjs"
   },
   "dependencies": {},
