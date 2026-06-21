@@ -5,7 +5,7 @@
 import { el } from './dom.js';
 import { openModal, formModal, confirmModal } from './modal.js';
 import { state } from '../core/state.js';
-import { isAvailable, describeLeakage } from '../core/ai.js';
+import { isAvailable, describeLeakage, ensureLocal } from '../core/ai.js';
 import { suggestMetadata, describeToRedact } from '../core/sidecar.js';
 import { dispatch } from '../core/runner.js';
 import { openAiSettings } from './ai-settings.js';
@@ -33,6 +33,10 @@ export function openSidecarMenu() {
 
 async function ensureAi() {
   if (isAvailable()) return true;
+  // The user just invoked an AI surface with nothing configured — only NOW is it
+  // appropriate to check localhost for a local model (this is the one network probe,
+  // behind an explicit AI action, never on load).
+  if (await ensureLocal()) return true;
   if (await confirmModal('No AI model is configured. Set one up now?', { title: 'AI sidecar', okLabel: 'Configure' })) await openAiSettings();
   return isAvailable();
 }

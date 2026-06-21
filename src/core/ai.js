@@ -78,15 +78,27 @@ export async function detectLocal({ timeoutMs = 800 } = {}) {
   return null;
 }
 
-// Load any saved BYOK config + (re)detect local. Sets the active tier: local wins
-// (closest, nothing leaves) unless absent, then BYOK.
+// Load any saved BYOK config. NETWORK-FREE on purpose: it must NOT probe localhost
+// here. A page that fetches http://localhost on load trips Chrome's "access devices on
+// your local network" permission prompt — hostile, unprompted, on open. Local
+// detection is deferred to the moment the user actually engages AI and needs a model
+// (ensureLocal / the AI settings "detect" button) — sought only when required.
 export async function init() {
   const cfg = await getAiConfig().catch(() => null);
   if (cfg?.endpoint && cfg?.model) _state.byok = { endpoint: cfg.endpoint, model: cfg.model, keyFingerprint: cfg.keyFingerprint || '' };
-  await detectLocal().catch(() => {});
-  _state.tier = _state.local ? 'local' : (_state.byok ? 'byok' : 'none');
+  _state.tier = _state.byok ? 'byok' : 'none';
   emit('ai:changed', aiState());
   return aiState();
+}
+
+// Opportunistically detect a local model ONLY when the user is already engaging AI and
+// no provider is active yet (e.g. they invoked a sidecar surface with nothing
+// configured). This is the one place a boot-clean app may touch localhost — and only
+// behind an explicit AI action. Returns true if a local model is now available.
+export async function ensureLocal() {
+  if (_state.tier !== 'none') return _state.tier === 'local';
+  await detectLocal().catch(() => {});
+  return _state.tier === 'local';
 }
 
 export async function configureByok({ endpoint, model, apiKey }) {

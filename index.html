@@ -2914,15 +2914,27 @@ async function detectLocal({ timeoutMs = 800 } = {}) {
   return null;
 }
 
-// Load any saved BYOK config + (re)detect local. Sets the active tier: local wins
-// (closest, nothing leaves) unless absent, then BYOK.
+// Load any saved BYOK config. NETWORK-FREE on purpose: it must NOT probe localhost
+// here. A page that fetches http://localhost on load trips Chrome's "access devices on
+// your local network" permission prompt — hostile, unprompted, on open. Local
+// detection is deferred to the moment the user actually engages AI and needs a model
+// (ensureLocal / the AI settings "detect" button) — sought only when required.
 async function init() {
   const cfg = await getAiConfig().catch(() => null);
   if (cfg?.endpoint && cfg?.model) _state.byok = { endpoint: cfg.endpoint, model: cfg.model, keyFingerprint: cfg.keyFingerprint || '' };
-  await detectLocal().catch(() => {});
-  _state.tier = _state.local ? 'local' : (_state.byok ? 'byok' : 'none');
+  _state.tier = _state.byok ? 'byok' : 'none';
   emit('ai:changed', aiState());
   return aiState();
+}
+
+// Opportunistically detect a local model ONLY when the user is already engaging AI and
+// no provider is active yet (e.g. they invoked a sidecar surface with nothing
+// configured). This is the one place a boot-clean app may touch localhost — and only
+// behind an explicit AI action. Returns true if a local model is now available.
+async function ensureLocal() {
+  if (_state.tier !== 'none') return _state.tier === 'local';
+  await detectLocal().catch(() => {});
+  return _state.tier === 'local';
 }
 
 async function configureByok({ endpoint, model, apiKey }) {
@@ -2972,7 +2984,7 @@ function parseJsonLoose(text) {
   throw new Error('Model did not return valid JSON');
 }
 
-return { _setFetch, aiState, isAvailable, describeLeakage, detectLocal, init, configureByok, disableByok, complete };
+return { _setFetch, aiState, isAvailable, describeLeakage, detectLocal, init, ensureLocal, configureByok, disableByok, complete };
 })();
 
 /* ui/dom.js */
@@ -4165,6 +4177,7 @@ const confirmModal = __m_ui_modal.confirmModal;
 const state = __m_core_state.state;
 const isAvailable = __m_core_ai.isAvailable;
 const describeLeakage = __m_core_ai.describeLeakage;
+const ensureLocal = __m_core_ai.ensureLocal;
 const suggestMetadata = __m_core_sidecar.suggestMetadata;
 const describeToRedact = __m_core_sidecar.describeToRedact;
 const dispatch = __m_core_runner.dispatch;
@@ -4193,6 +4206,10 @@ function openSidecarMenu() {
 
 async function ensureAi() {
   if (isAvailable()) return true;
+  // The user just invoked an AI surface with nothing configured — only NOW is it
+  // appropriate to check localhost for a local model (this is the one network probe,
+  // behind an explicit AI action, never on load).
+  if (await ensureLocal()) return true;
   if (await confirmModal('No AI model is configured. Set one up now?', { title: 'AI sidecar', okLabel: 'Configure' })) await openAiSettings();
   return isAvailable();
 }
