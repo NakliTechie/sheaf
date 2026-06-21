@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sheaf — visual guide</title>
+<style>
+  :root {
+      --bg: #14161a;
+      --bg-raised: #1c1f25;
+      --bg-sunken: #0f1114;
+      --panel: #1c1f25;
+      --panel-border: #2b2f37;
+      --canvas-bg: #0b0c0f;
+      --fg: #e7e9ee;
+      --fg-muted: #9aa1ad;
+      --fg-faint: #6b7280;
+      --accent: #5b8cff;
+      --accent-fg: #ffffff;
+      --accent-soft: #21304f;
+      --danger: #ff5c5c;
+      --danger-soft: #3a1f22;
+      --warn: #ffb454;
+      --ok: #4ec98f;
+      --page-shadow: 0 2px 14px rgba(0,0,0,.55);
+      --overlay: rgba(8,9,11,.66);
+      --r-sm: 5px;
+      --r-md: 9px;
+      --r-lg: 14px;
+      --sp-1: 4px;
+      --sp-2: 8px;
+      --sp-3: 12px;
+      --sp-4: 16px;
+      --sp-5: 24px;
+      --sp-6: 36px;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      --toolbar-h: 52px;
+      --rail-w: 168px;
+      --shadow-pop: 0 10px 40px rgba(0,0,0,.5);
+    --maxw: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.5; -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  header.top {
+    border-bottom: 1px solid var(--panel-border);
+    background: linear-gradient(180deg, var(--bg-raised), var(--bg));
+    padding: 40px 24px 28px;
+  }
+  header.top .wrap { max-width: var(--maxw); margin: 0 auto; }
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  .brand b { font-size: 30px; letter-spacing: -.01em; }
+  .brand .ver { color: var(--fg-faint); font-size: 14px; }
+  .tagline { color: var(--fg-muted); font-size: 16px; max-width: 70ch; margin: 10px 0 0; }
+  .privacy { display: inline-flex; gap: 8px; align-items: center; margin-top: 16px;
+    font-size: 13px; color: var(--fg-faint); border: 1px solid var(--panel-border);
+    background: var(--bg-sunken); padding: 7px 12px; border-radius: var(--r-md); }
+  .privacy b { color: var(--ok); font-weight: 600; }
+
+  .searchbar { position: sticky; top: 0; z-index: 20;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(8px); border-bottom: 1px solid var(--panel-border); }
+  .searchbar .wrap { max-width: var(--maxw); margin: 0 auto; padding: 12px 24px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  #q { flex: 1; min-width: 220px; font: inherit; font-size: 15px; color: var(--fg);
+    background: var(--bg-sunken); border: 1px solid var(--panel-border);
+    border-radius: var(--r-md); padding: 10px 14px; outline: none; }
+  #q:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+  .searchbar .hint { color: var(--fg-faint); font-size: 12px; }
+  .searchbar .hint kbd { font-family: var(--mono); background: var(--bg-sunken);
+    border: 1px solid var(--panel-border); border-radius: 5px; padding: 1px 6px; }
+  nav.toc { display: flex; flex-wrap: wrap; gap: 8px; }
+  nav.toc a { font-size: 13px; color: var(--fg-muted); border: 1px solid var(--panel-border);
+    background: var(--bg-raised); padding: 5px 11px; border-radius: 999px; }
+  nav.toc a:hover { color: var(--fg); border-color: var(--accent); text-decoration: none; }
+
+  main { max-width: var(--maxw); margin: 0 auto; padding: 8px 24px 80px; }
+  .sec { padding-top: 36px; scroll-margin-top: 76px; }
+  .sec > h2 { font-size: 22px; margin: 0 0 4px; letter-spacing: -.01em; }
+  .sec .intro { color: var(--fg-muted); margin: 0 0 20px; max-width: 75ch; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 22px; }
+
+  figure.card { margin: 0; border: 1px solid var(--panel-border); border-radius: var(--r-lg);
+    overflow: hidden; background: var(--panel); display: flex; flex-direction: column;
+    transition: border-color .15s, transform .15s; }
+  figure.card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .card .shot { display: block; background: var(--canvas-bg); border-bottom: 1px solid var(--panel-border); }
+  .card .shot img { display: block; width: 100%; height: auto; }
+  .card figcaption { padding: 14px 16px 16px; }
+  .card h3 { margin: 0 0 6px; font-size: 15px; }
+  .card p { margin: 0; color: var(--fg-muted); font-size: 13.5px; }
+
+  .nomatch { display: none; color: var(--fg-muted); padding: 40px 4px; font-size: 15px; }
+  .nomatch.show { display: block; }
+  .sec.hidden, figure.card.hidden { display: none; }
+
+  footer { max-width: var(--maxw); margin: 0 auto; padding: 24px; border-top: 1px solid var(--panel-border);
+    color: var(--fg-faint); font-size: 13px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+</style>
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <div class="brand"><b>Sheaf</b> <span class="ver">visual guide</span></div>
+      <p class="tagline">A browser-native PDF editor in a single HTML file — tool one of the Bench suite. Every screen below was captured from the running app. Open, edit, redact, sign, and save your PDF without it ever leaving your machine.</p>
+      <div class="privacy">🌙 <span><b>No account · no upload · no telemetry · works offline.</b> Your document is opened off disk, edited in the tab, and saved back.</span></div>
+    </div>
+  </header>
+
+  <div class="searchbar">
+    <div class="wrap">
+      <input id="q" type="search" placeholder="Search features — try “redact”, “sign”, “OCR”…" autocomplete="off" aria-label="Search the guide">
+      <span class="hint"><kbd>/</kbd> to search · <kbd>Esc</kbd> to clear</span>
+      <nav class="toc"><a href="#start">Getting started</a><a href="#pages">Pages</a><a href="#markup">Markup &amp; text</a><a href="#redaction">Redaction</a><a href="#sign-forms">Sign &amp; forms</a><a href="#marks-export">Marks, OCR &amp; export</a><a href="#document">Document &amp; saving</a><a href="#ai">AI sidecar</a><a href="#settings">Settings, help &amp; themes</a></nav>
+    </div>
+  </div>
+
+  <main>
+    <p class="nomatch" id="nomatch">No features match that search.</p>
+    
+    <section class="sec" id="start" data-title="getting started">
+      <h2>Getting started</h2>
+      <p class="intro">Sheaf opens a PDF straight off your disk and edits it entirely in the browser tab. No account, no upload, no telemetry — and it works offline.</p>
+      <div class="grid">
+      <figure class="card" data-search="getting started open a pdf to start drag a pdf in, pick one from disk, or open a whole folder. everything happens in this browser tab — no account, no upload, and it works offline. welcome">
+        <a class="shot" href="screenshots/feature/01-welcome.png" target="_blank" rel="noopener">
+          <img loading="lazy" src="screenshots/feature/01-welcome.png" alt="Open a PDF to start">
+        </a>
+        <figcaption>
+          <h3>Open a PDF to start</h3>
+          <p>Drag a PDF in, pick one from disk, or open a whole folder. Everything happens in this browser tab — no account, no upload, and it works offline.</p>
+        </figcaption>
+      </figure>
+      <figure class="card" data-search="getting started the workspace a thumbnail rail, the page canvas, and one toolbar. every button dispatches through the same core as the keyboard shortcuts and the optional agent face — one engine, several doors. editor">
+        <a class="shot" href="screenshots/feature/02-editor.png" target="_blank" rel="noopener">
+          <img loading="lazy" src="screenshots/feature/02-editor.png" alt="The workspace">
+        </a>
+        <figcaption>
+          <h3>The workspace</h3>
+          <p>A thumbnail rail, the page canvas, and one toolbar. Every button dispatches through the same core as the keyboard shortcuts and the optional agent face — one engine, several doors.</p>
+        </figcaption>
+      </figure></div>
+    </section>
+    <section class="sec" id="pages" data-title="pages">
+      <h2>Pages</h2>
+      <p class="intro">Page-level operations act on the pages you select in the left rail, or the current page when nothing is selected.</p>
+      <div class="grid">
+      <figure class="card" data-search="pages reorder, rotate, delete pages select pages in the rail, then rotate, duplicate, delete, scale, extract, or insert blanks — or merge another pdf in. drag a thumbnail to reorder. (page 2 is shown rotated.) pages">
+        <a class="shot" href="screenshots/feature/03-pages.png" target="_blank" rel="noopener">
+          <img loading="lazy" src="screenshots/feature/03-pages.png" alt="Reorder, rotate, delete pages">
+        </a>
+        <figcaption>
+          <h3>Reorder, rotate, delete pages</h3>
+          <p>Select pages in the rail, then rotate, duplicate, delete, scale, extract, or insert blanks — or merge another PDF in. Drag a thumbnail to reorder. (Page 2 is shown rotated.)</p>
+        </figcaption>
+      </figure></div>
+    </section>
+    <section class="sec" id="markup" data-title="markup &amp; text">
+      <h2>Markup &amp; text</h2>
+      <p class="intro">Add annotations on top of the page, or change the text that is already inside it.</p>
+      <div class="grid">
+      <figure class="card" data-search="markup &amp; text highlight, shapes &amp; freehand highlighter, rectangle, line, and pencil tools draw straight onto the page. pick a colour in the toolbar and drag where you want the mark. annotate">
+        <a class="shot" href="screenshots/feature/04-annotate.png" target="_blank" rel="noopener">
+          <img loading="lazy" src="screenshots/feature/04-annotate.png" alt="Highlight, shapes &amp; freehand">
+        </a>
+        <figcaption>
+          <h3>Highlight, shapes &amp; freehand</h3>
+          <p>Highlighter, rectangle, line, and pencil tools draw straight onto the page. Pick a colour in the toolbar and drag where you want the mark.</p>
+        </figcaption>
+      </figure>
+      <figure class="card" data-search="markup &amp; text edit the text that's already there the edit-text tool finds the line you click through the pdf text layer and lets you retype it in place, matched to the surrounding font and size. edit-text">
+        <a class="shot" href="screenshots/feature/05-edit-text.png" target="_blank" rel="noopener">
+          <img loading="lazy" src="screenshots/feature/05-edit-text.png" alt="Edit the text that's already there">
+        </a>
+        <figcaption>
+          <h3>Edit the text that's already there</h3>
+          <p>The Edit-text tool finds the line you click through the PDF text layer and lets you retype it in place, matched to the surrounding font and size.</p>
+        </figcaption>
+      </figure>
+      <figure class="card" data-search="markup &amp; text whiteout &amp; retype cover a region in white and optionally type replacement text over it — quick corrections that don't need true byte removal. whiteout">
+        <a class="shot" href="screenshots/feature/06-whiteout.png" target="_blank" rel="noopener">
+          <img loading="lazy" src="screenshots/feature/06-whiteout.png" alt="Whiteout &amp; retype">
+        </a>
+        <figcaption>
+          <h3>Whiteout &amp; retype</h3>
+          <p>Cover a region in white and optionally type replacement text over it — quick corrections that don't need true byte removal.</p>
+        </figcaption>
+      </figure></div>
+    </section>
+    <section class="sec" id="redaction" data-title="redaction">
+      <h2>Redaction</h2>
+      <p class="intro">The feature Sheaf takes most seriously: removal that is real, not cosmetic.</p>
+      <div class="grid">
+      <figure class="card" data-search="redaction true redaction — not a black box redaction removes the underlying text and image bytes from the pdf and then draws the bar. save the file and the secret is genuinely gone — verifiable in the bytes, not just hidden under a rectangle. redact">
+        <a class="shot" href="screenshots/feature/07-redact.png" target="_blank" rel="noopener">
+          <img loading="lazy" src="screenshots/feature/07-redact.png" alt="True redaction — not a black box">
+        </a>
+        <figcaption>
+          <h3>True redaction — not a black box</h3>
+          <p>Redaction removes the underlying text and image bytes from the PDF and then draws the bar. Save the file and the secret is genuinely gone — verifiable in the bytes, not just hidden under a rectangle.</p>
+        </figcaption>
+      </figure></div>
+    </section>
+    <section class="sec" id="sign-forms" data-title="sign &amp; forms">
+      <h2>Sign &amp; forms</h2>
+      <p class="intro">Put a signature on the page, and work with interactive form fields.</p>
+      <div class="grid">
+      <figure class="card" data-search="sign &amp; forms signatures type, draw, upload, or reuse a saved signature, then place it anywhere on the page. saved signatures live in this browser only. sign">
+        <a class="shot" href="screenshots/feature/08-sign.png" target="_blank" rel="noopener">
+          <img loading="lazy" src="screenshots/feature/08-sign.png" alt="Signatures">
+        </a>
+        <figcaption>
+          <h3>Signatures</h3>
+          <p>Type, draw, upload, or reuse a saved signature, then place it anywhere on the page. Saved signatures live in this browser only.</p>
+        </figcaption>
+      </figure>
+      <figure class="card" data-search="sign &amp; forms fill &amp; flatten forms sheaf detects acroform fields and fills them from a single dialog. flatten the form to bake the values permanently into the page. forms">
+        <a class="shot" href="screenshots/feature/10-forms.png" target="_blank" rel="noopener">
+          <img loading="lazy" src="screenshots/feature/10-forms.png" alt="Fill &amp; flatten forms">
+        </a>
+        <figcaption>
+          <h3>Fill &amp; flatten forms</h3>
+          <p>Sheaf detects AcroForm fields and fills them from a single dialog. Flatten the form to bake the values permanently into the page.</p>
+        </figcaption>
+      </figure></div>
+    </section>
+    <section class="sec" id="marks-export" data-title="marks, ocr &amp; export">
+      <h2>Marks, OCR &amp; export</h2>
+      <p class="intro">Stamp every page, lift text out of scans, and get pages back out as images or text.</p>
+      <div class="grid">
+      <figure class="card" data-search="marks, ocr &amp; export watermarks, page numbers, bates stamp a diagonal watermark, page numbers, sequential bates numbers (for legal work), or a fixed header/footer across every page. marks">
+        <a class="shot" href="screenshots/feature/09-marks.png" target="_blank" rel="noopener">
+          <img loading="lazy" src="screenshots/feature/09-marks.png" alt="Watermarks, page numbers, Bates">
+        </a>
+        <figcaption>
+          <h3>Watermarks, page numbers, Bates</h3>
+          <p>Stamp a diagonal watermark, page numbers, sequential Bates numbers (for legal work), or a fixed header/footer across every page.</p>
+        </figcaption>
+      </figure>
+      <figure class="card" data-search="marks, ocr &amp; export make a scan searchable tesseract runs entirely in the tab to add a searchable text layer to scanned pages, or to extract their text. nothing is uploaded. ocr">
+        <a class="shot" href="screenshots/feature/11-ocr.png" target="_blank" rel="noopener">
+          <img loading="lazy" src="screenshots/feature/11-ocr.png" alt="Make a scan searchable">
+        </a>
+        <figcaption>
+          <h3>Make a scan searchable</h3>
+          <p>Tesseract runs entirely in the tab to add a searchable text layer to scanned pages, or to extract their text. Nothing is uploaded.</p>
+        </figcaption>
+      </figure>
+      <figure class="card" data-search="marks, ocr &amp; export export &amp; convert render pages to images, pull out plain text, or save a converted copy. the original file is never touched. convert">
+        <a class="shot" href="screenshots/feature/12-convert.png" target="_blank" rel="noopener">
+          <img loading="lazy" src="screenshots/feature/12-convert.png" alt="Export &amp; convert">
+        </a>
+        <figcaption>
+          <h3>Export &amp; convert</h3>
+          <p>Render pages to images, pull out plain text, or save a converted copy. The original file is never touched.</p>
+        </figcaption>
+      </figure></div>
+    </section>
+    <section class="sec" id="document" data-title="document &amp; saving">
+      <h2>Document &amp; saving</h2>
+      <p class="intro">Edit the document’s properties and control exactly how it is written back to disk.</p>
+      <div class="grid">
+      <figure class="card" data-search="document &amp; saving title, author, keywords read and edit the document's metadata. writing is deterministic — sheaf won't silently re-stamp modification dates you didn't change. metadata">
+        <a class="shot" href="screenshots/feature/13-metadata.png" target="_blank" rel="noopener">
+          <img loading="lazy" src="screenshots/feature/13-metadata.png" alt="Title, author, keywords">
+        </a>
+        <figcaption>
+          <h3>Title, author, keywords</h3>
+          <p>Read and edit the document's metadata. Writing is deterministic — Sheaf won't silently re-stamp modification dates you didn't change.</p>
+        </figcaption>
+      </figure>
+      <figure class="card" data-search="document &amp; saving save in place, or a copy save back to the same file (file system access), drop a timestamped copy into a workspace folder, or download — your choice, no lock-in. save">
+        <a class="shot" href="screenshots/feature/14-save.png" target="_blank" rel="noopener">
+          <img loading="lazy" src="screenshots/feature/14-save.png" alt="Save in place, or a copy">
+        </a>
+        <figcaption>
+          <h3>Save in place, or a copy</h3>
+          <p>Save back to the same file (File System Access), drop a timestamped copy into a workspace folder, or download — your choice, no lock-in.</p>
+        </figcaption>
+      </figure></div>
+    </section>
+    <section class="sec" id="ai" data-title="ai sidecar">
+      <h2>AI sidecar</h2>
+      <p class="intro">AI is an optional, removable sidecar — never a requirement and never a default.</p>
+      <div class="grid">
+      <figure class="card" data-search="ai sidecar optional ai sidecar (byok) off by default and fully removable. when enabled it reaches a local model or your own api key, and is honest about exactly what — if anything — leaves the machine. ai">
+        <a class="shot" href="screenshots/feature/15-ai.png" target="_blank" rel="noopener">
+          <img loading="lazy" src="screenshots/feature/15-ai.png" alt="Optional AI sidecar (BYOK)">
+        </a>
+        <figcaption>
+          <h3>Optional AI sidecar (BYOK)</h3>
+          <p>Off by default and fully removable. When enabled it reaches a local model or your own API key, and is honest about exactly what — if anything — leaves the machine.</p>
+        </figcaption>
+      </figure></div>
+    </section>
+    <section class="sec" id="settings" data-title="settings, help &amp; themes">
+      <h2>Settings, help &amp; themes</h2>
+      <p class="intro">Tune Sheaf to your taste; everything here stays local to your browser.</p>
+      <div class="grid">
+      <figure class="card" data-search="settings, help &amp; themes preferences view mode, the developer agent face, ai configuration, and theme. only preferences are ever persisted — never document content. settings">
+        <a class="shot" href="screenshots/feature/16-settings.png" target="_blank" rel="noopener">
+          <img loading="lazy" src="screenshots/feature/16-settings.png" alt="Preferences">
+        </a>
+        <figcaption>
+          <h3>Preferences</h3>
+          <p>View mode, the developer agent face, AI configuration, and theme. Only preferences are ever persisted — never document content.</p>
+        </figcaption>
+      </figure>
+      <figure class="card" data-search="settings, help &amp; themes keyboard &amp; privacy in-app help lists the live keyboard grammar (read from the real registry, so it never drifts) and restates the privacy posture. help">
+        <a class="shot" href="screenshots/feature/17-help.png" target="_blank" rel="noopener">
+          <img loading="lazy" src="screenshots/feature/17-help.png" alt="Keyboard &amp; privacy">
+        </a>
+        <figcaption>
+          <h3>Keyboard &amp; privacy</h3>
+          <p>In-app help lists the live keyboard grammar (read from the real registry, so it never drifts) and restates the privacy posture.</p>
+        </figcaption>
+      </figure>
+      <figure class="card" data-search="settings, help &amp; themes light &amp; dark one click toggles the theme. the whole ui is built from design tokens, so light and dark are a single variable swap — not a second stylesheet. light-theme">
+        <a class="shot" href="screenshots/feature/18-light-theme.png" target="_blank" rel="noopener">
+          <img loading="lazy" src="screenshots/feature/18-light-theme.png" alt="Light &amp; dark">
+        </a>
+        <figcaption>
+          <h3>Light &amp; dark</h3>
+          <p>One click toggles the theme. The whole UI is built from design tokens, so light and dark are a single variable swap — not a second stylesheet.</p>
+        </figcaption>
+      </figure></div>
+    </section>
+  </main>
+
+  <footer>
+    <span>Sheaf — open it at <a href="../index.html">../index.html</a></span>
+    <span>This guide is generated — edit <code>guide/build_index.mjs</code>, not this file.</span>
+  </footer>
+
+  <script>
+    const q = document.getElementById('q');
+    const cards = [...document.querySelectorAll('figure.card')];
+    const secs = [...document.querySelectorAll('section.sec')];
+    const nomatch = document.getElementById('nomatch');
+    function apply() {
+      const term = q.value.trim().toLowerCase();
+      let any = false;
+      for (const c of cards) {
+        const hit = !term || c.dataset.search.includes(term);
+        c.classList.toggle('hidden', !hit);
+        if (hit) any = true;
+      }
+      for (const s of secs) {
+        const visible = s.querySelector('figure.card:not(.hidden)');
+        s.classList.toggle('hidden', !visible);
+      }
+      nomatch.classList.toggle('show', !any);
+    }
+    q.addEventListener('input', apply);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === '/' && document.activeElement !== q) { e.preventDefault(); q.focus(); }
+      else if (e.key === 'Escape') { q.value = ''; apply(); q.blur(); }
+    });
+  </script>
+</body>
+</html>

@@ -11,6 +11,7 @@ src
 test
 build
 plan
+guide
 *.log
 *.md
 .gitignore
