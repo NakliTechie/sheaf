@@ -6,11 +6,13 @@ import { registerAll } from '../core/registry.js';
 import { ops as openOps } from './open.js';
 import { ops as pageOps } from './pages.js';
 import { ops as metadataOps } from './metadata.js';
+import { ops as marksOps } from './marks.js';
 
 export function registerOps() {
   registerAll([
     ...openOps,
     ...pageOps,
     ...metadataOps,
+    ...marksOps,
   ]);
 }

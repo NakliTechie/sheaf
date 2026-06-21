@@ -24,6 +24,7 @@ const P = {
   pages:   '<rect x="4" y="3" width="14" height="18" rx="2"/><path d="M8 3v18"/>',
   zoomin:  '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4M11 8v6M8 11h6"/>',
   zoomout: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4M8 11h6"/>',
+  mark:    '<path d="M20.6 8.5 8.4 20.7a2 2 0 0 1-1.7.6l-3-.4a1 1 0 0 1-.8-.8l-.4-3a2 2 0 0 1 .6-1.7L15.5 3.4a2 2 0 0 1 2.8 0l2.3 2.3a2 2 0 0 1 0 2.8z"/><path d="M14 5l5 5"/>',
 };
 
 export function icon(name) {

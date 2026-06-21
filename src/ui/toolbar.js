@@ -14,6 +14,7 @@ import { toast } from './toast.js';
 import { openPdf, newBlank, savePdf, savePdfAs, mergePdf } from './fileops.js';
 import { openSettings } from './settings.js';
 import { openHelp } from './help.js';
+import { openMarksMenu } from './marksmenu.js';
 
 let bar = null;
 const need = [];   // buttons needing a document
@@ -71,6 +72,7 @@ function render(version) {
       btn('insert', '', onInsert, { needsDoc: true }),
       btn('scale', '', onScale, { needsDoc: true }),
       btn('merge', '', mergePdf, { needsDoc: true }),
+      btn('mark', '', openMarksMenu, { needsDoc: true }),
       btn('info', '', onMetadata, { needsDoc: true }),
     ]),
 

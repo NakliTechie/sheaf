@@ -1155,6 +1155,160 @@ const ops = [
 return { ops };
 })();
 
+/* ops/marks.js */
+const __m_ops_marks = (() => {
+// ops/marks.js — page marks (pdf-lib): watermark, page numbers, Bates numbering,
+// header/footer text. All draw onto existing pages (mutate in place); the runner
+// normalizes through bytes afterward. Deterministic — no timestamps, no randomness.
+
+const getEngine = __m_core_engines.getEngine;
+
+function lib() { return getEngine('pdf-lib'); }
+
+function hexToRgb(hex, fallback = [0, 0, 0]) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
+  if (!m) return fallback;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
+}
+
+function resolvePages(doc, pages) {
+  const count = doc.pageCount();
+  if (!pages || !pages.length) return [...Array(count).keys()];
+  for (const i of pages) if (i < 0 || i >= count) throw new Error(`Page ${i} out of range`);
+  return pages;
+}
+
+async function helvetica(doc) {
+  const { StandardFonts } = lib();
+  return doc.pdf.embedFont(StandardFonts.Helvetica);
+}
+
+// position → {x,y} given page size, text width, font size, margin.
+function place(position, pw, ph, tw, fs, margin = 28) {
+  const left = margin, right = pw - tw - margin, center = (pw - tw) / 2;
+  const bottom = margin, top = ph - fs - margin / 2;
+  const map = {
+    'bottom-center': [center, bottom], 'bottom-left': [left, bottom], 'bottom-right': [right, bottom],
+    'top-center': [center, top], 'top-left': [left, top], 'top-right': [right, top],
+  };
+  return map[position] || map['bottom-center'];
+}
+
+const ops = [
+  {
+    id: 'marks.watermark', label: 'Watermark', group: 'marks', icon: 'info',
+    description: 'Draw a diagonal text watermark across the given pages (all pages if omitted).',
+    agentCallable: true,
+    params: {
+      text: { type: 'string', required: true, maxLength: 200 },
+      opacity: { type: 'number', default: 0.18, min: 0.02, max: 1 },
+      fontSize: { type: 'number', default: 60, min: 6, max: 400 },
+      color: { type: 'string', default: '#888888' },
+      pages: { type: 'array', items: { type: 'int', min: 0 } },
+    },
+    async run(doc, { text, opacity, fontSize, color, pages }) {
+      const { rgb, degrees } = lib();
+      const font = await helvetica(doc);
+      const [r, g, b] = hexToRgb(color, [0.53, 0.53, 0.53]);
+      const ps = doc.pdf.getPages();
+      for (const i of resolvePages(doc, pages)) {
+        const page = ps[i];
+        const { width, height } = page.getSize();
+        const tw = font.widthOfTextAtSize(text, fontSize);
+        // Center the rotated text roughly on the page diagonal.
+        page.drawText(text, {
+          x: width / 2 - (tw / 2) * Math.cos(Math.PI / 4),
+          y: height / 2 - (tw / 2) * Math.sin(Math.PI / 4),
+          size: fontSize, font, color: rgb(r, g, b), opacity, rotate: degrees(45),
+        });
+      }
+      return { doc };
+    },
+  },
+
+  {
+    id: 'marks.pageNumbers', label: 'Page numbers', group: 'marks', icon: 'info',
+    description: 'Stamp page numbers. format uses {n} and {total} (e.g. "{n} / {total}").',
+    agentCallable: true,
+    params: {
+      format: { type: 'string', default: '{n}', maxLength: 40 },
+      position: { type: 'string', default: 'bottom-center', enum: ['bottom-center', 'bottom-left', 'bottom-right', 'top-center', 'top-left', 'top-right'] },
+      fontSize: { type: 'number', default: 11, min: 5, max: 48 },
+      startAt: { type: 'int', default: 1 },
+      color: { type: 'string', default: '#444444' },
+    },
+    async run(doc, { format, position, fontSize, startAt, color }) {
+      const { rgb } = lib();
+      const font = await helvetica(doc);
+      const [r, g, b] = hexToRgb(color, [0.27, 0.27, 0.27]);
+      const ps = doc.pdf.getPages();
+      const total = ps.length;
+      ps.forEach((page, idx) => {
+        const label = format.replace(/\{n\}/g, String(startAt + idx)).replace(/\{total\}/g, String(total));
+        const { width, height } = page.getSize();
+        const tw = font.widthOfTextAtSize(label, fontSize);
+        const [x, y] = place(position, width, height, tw, fontSize);
+        page.drawText(label, { x, y, size: fontSize, font, color: rgb(r, g, b) });
+      });
+      return { doc };
+    },
+  },
+
+  {
+    id: 'marks.bates', label: 'Bates numbering', group: 'marks', icon: 'info',
+    description: 'Stamp sequential Bates numbers (prefix + zero-padded counter) for legal/discovery use.',
+    agentCallable: true,
+    params: {
+      prefix: { type: 'string', default: '', maxLength: 40 },
+      startAt: { type: 'int', default: 1, min: 0 },
+      digits: { type: 'int', default: 6, min: 1, max: 12 },
+      position: { type: 'string', default: 'bottom-right', enum: ['bottom-center', 'bottom-left', 'bottom-right', 'top-center', 'top-left', 'top-right'] },
+      fontSize: { type: 'number', default: 10, min: 5, max: 48 },
+    },
+    async run(doc, { prefix, startAt, digits, position, fontSize }) {
+      const { rgb } = lib();
+      const font = await helvetica(doc);
+      const ps = doc.pdf.getPages();
+      ps.forEach((page, idx) => {
+        const label = `${prefix}${String(startAt + idx).padStart(digits, '0')}`;
+        const { width, height } = page.getSize();
+        const tw = font.widthOfTextAtSize(label, fontSize);
+        const [x, y] = place(position, width, height, tw, fontSize);
+        page.drawText(label, { x, y, size: fontSize, font, color: rgb(0.1, 0.1, 0.1) });
+      });
+      return { doc };
+    },
+  },
+
+  {
+    id: 'marks.text', label: 'Header / footer', group: 'marks', icon: 'info',
+    description: 'Stamp a fixed header or footer text at the given position on every page.',
+    agentCallable: true,
+    params: {
+      text: { type: 'string', required: true, maxLength: 200 },
+      position: { type: 'string', default: 'top-center', enum: ['bottom-center', 'bottom-left', 'bottom-right', 'top-center', 'top-left', 'top-right'] },
+      fontSize: { type: 'number', default: 11, min: 5, max: 48 },
+      color: { type: 'string', default: '#444444' },
+    },
+    async run(doc, { text, position, fontSize, color }) {
+      const { rgb } = lib();
+      const font = await helvetica(doc);
+      const [r, g, b] = hexToRgb(color, [0.27, 0.27, 0.27]);
+      for (const page of doc.pdf.getPages()) {
+        const { width, height } = page.getSize();
+        const tw = font.widthOfTextAtSize(text, fontSize);
+        const [x, y] = place(position, width, height, tw, fontSize);
+        page.drawText(text, { x, y, size: fontSize, font, color: rgb(r, g, b) });
+      }
+      return { doc };
+    },
+  },
+];
+
+return { ops };
+})();
+
 /* ops/index.js */
 const __m_ops_index = (() => {
 // ops/index.js — the one place ops register into the registry. Importing a new op
@@ -1165,12 +1319,14 @@ const registerAll = __m_core_registry.registerAll;
 const openOps = __m_ops_open.ops;
 const pageOps = __m_ops_pages.ops;
 const metadataOps = __m_ops_metadata.ops;
+const marksOps = __m_ops_marks.ops;
 
 function registerOps() {
   registerAll([
     ...openOps,
     ...pageOps,
     ...metadataOps,
+    ...marksOps,
   ]);
 }
 
@@ -1669,6 +1825,7 @@ const P = {
   pages:   '<rect x="4" y="3" width="14" height="18" rx="2"/><path d="M8 3v18"/>',
   zoomin:  '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4M11 8v6M8 11h6"/>',
   zoomout: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4M8 11h6"/>',
+  mark:    '<path d="M20.6 8.5 8.4 20.7a2 2 0 0 1-1.7.6l-3-.4a1 1 0 0 1-.8-.8l-.4-3a2 2 0 0 1 .6-1.7L15.5 3.4a2 2 0 0 1 2.8 0l2.3 2.3a2 2 0 0 1 0 2.8z"/><path d="M14 5l5 5"/>',
 };
 
 function icon(name) {
@@ -2553,6 +2710,72 @@ function prettyCombo(combo) {
 return { openHelp };
 })();
 
+/* ui/marksmenu.js */
+const __m_ui_marksmenu = (() => {
+// marksmenu.js — the Marks menu (watermark, page numbers, Bates, header/footer).
+// Each opens a small parameter form, then dispatches through the one runner.
+
+const el = __m_ui_dom.el;
+const openModal = __m_ui_modal.openModal;
+const formModal = __m_ui_modal.formModal;
+const dispatch = __m_core_runner.dispatch;
+
+function openMarksMenu() {
+  const item = (label, desc, fn) => el('button', {
+    class: 'btn', style: 'justify-content:flex-start;width:100%;text-align:left;height:auto;padding:10px 12px;flex-direction:column;align-items:flex-start;gap:2px',
+    onClick: async ({ currentTarget }) => { currentTarget.closest('#modal-root') && close(); await fn(); },
+  }, [el('span', { text: label, style: 'font-size:14px' }), el('span', { text: desc, style: 'font-size:12px;color:var(--fg-faint)' })]);
+
+  let close;
+  const content = ({ close: c }) => { close = c; return el('div', { style: 'display:flex;flex-direction:column;gap:6px' }, [
+    item('Watermark', 'Diagonal text across every page', addWatermark),
+    item('Page numbers', 'Stamp {n} or {n} / {total}', addPageNumbers),
+    item('Bates numbering', 'Sequential prefix + counter (legal)', addBates),
+    item('Header / footer', 'Fixed text at a chosen corner', addHeaderFooter),
+  ]); };
+  return openModal({ title: 'Add marks', content, actions: [{ label: 'Close', value: true }] });
+}
+
+async function addWatermark() {
+  const v = await formModal('Watermark', [
+    { name: 'text', label: 'Text', value: 'CONFIDENTIAL' },
+    { name: 'fontSize', label: 'Size', type: 'number', value: 60 },
+    { name: 'color', label: 'Colour (hex)', value: '#888888' },
+  ]);
+  if (v?.text) dispatch('marks.watermark', v);
+}
+
+async function addPageNumbers() {
+  const v = await formModal('Page numbers', [
+    { name: 'format', label: 'Format ({n}, {total})', value: '{n} / {total}' },
+    { name: 'position', label: 'Position', type: 'select', value: 'bottom-center',
+      options: ['bottom-center', 'bottom-left', 'bottom-right', 'top-center', 'top-left', 'top-right'].map(o => ({ value: o, label: o })) },
+    { name: 'startAt', label: 'Start at', type: 'number', value: 1 },
+  ]);
+  if (v) dispatch('marks.pageNumbers', v);
+}
+
+async function addBates() {
+  const v = await formModal('Bates numbering', [
+    { name: 'prefix', label: 'Prefix', value: 'ABC' },
+    { name: 'startAt', label: 'Start at', type: 'number', value: 1 },
+    { name: 'digits', label: 'Digits', type: 'number', value: 6 },
+  ]);
+  if (v) dispatch('marks.bates', v);
+}
+
+async function addHeaderFooter() {
+  const v = await formModal('Header / footer', [
+    { name: 'text', label: 'Text', value: '' },
+    { name: 'position', label: 'Position', type: 'select', value: 'top-center',
+      options: ['top-center', 'top-left', 'top-right', 'bottom-center', 'bottom-left', 'bottom-right'].map(o => ({ value: o, label: o })) },
+  ]);
+  if (v?.text) dispatch('marks.text', v);
+}
+
+return { openMarksMenu };
+})();
+
 /* ui/toolbar.js */
 const __m_ui_toolbar = (() => {
 // toolbar.js — the top chrome. Buttons dispatch through the runner (the same door
@@ -2581,6 +2804,7 @@ const savePdfAs = __m_ui_fileops.savePdfAs;
 const mergePdf = __m_ui_fileops.mergePdf;
 const openSettings = __m_ui_settings.openSettings;
 const openHelp = __m_ui_help.openHelp;
+const openMarksMenu = __m_ui_marksmenu.openMarksMenu;
 
 let bar = null;
 const need = [];   // buttons needing a document
@@ -2638,6 +2862,7 @@ function render(version) {
       btn('insert', '', onInsert, { needsDoc: true }),
       btn('scale', '', onScale, { needsDoc: true }),
       btn('merge', '', mergePdf, { needsDoc: true }),
+      btn('mark', '', openMarksMenu, { needsDoc: true }),
       btn('info', '', onMetadata, { needsDoc: true }),
     ]),
 
