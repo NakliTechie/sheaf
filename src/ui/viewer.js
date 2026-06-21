@@ -12,6 +12,7 @@ import { renderPage } from '../core/render.js';
 import { currentRenderDoc } from './rendoc.js';
 
 const PAD = 16;
+const MAX_FIT_WIDTH = 1100; // px — fit-width never renders a page wider than this
 let viewport = null;
 let renderToken = 0;
 let lastRenderWidth = 0;
@@ -43,7 +44,9 @@ function scaleForPage(p) {
   const avail = viewport.clientWidth - PAD * 2;
   const availH = viewport.clientHeight - PAD * 2;
   switch (state.view.fitMode) {
-    case 'width':  return Math.max(0.1, avail / p.width);
+    // Cap fit-width so a small page doesn't balloon to absurd zoom on a wide monitor
+    // (a 420pt page on a 2000px viewport would otherwise be ~450%). Pages stay centered.
+    case 'width':  return Math.max(0.1, Math.min(avail, MAX_FIT_WIDTH) / p.width);
     case 'page':   return Math.max(0.1, Math.min(avail / p.width, availH / p.height));
     case 'actual': return 1.0;
     default:       return state.view.zoom; // 'custom'

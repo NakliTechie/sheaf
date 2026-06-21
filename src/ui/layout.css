@@ -68,6 +68,11 @@
   flex: 1; min-width: 0; overflow: auto; background: var(--canvas-bg);
   padding: var(--sp-5) var(--sp-4); display: flex; flex-direction: column;
   align-items: center; gap: var(--sp-5);
+  /* Reserve the scrollbar gutter so clientWidth never changes when content
+     appears/disappears. Without this, a render adds a scrollbar → clientWidth
+     shrinks → the ResizeObserver re-renders → content toggles the scrollbar → a
+     feedback loop where no render completes (blank viewport after every op). */
+  scrollbar-gutter: stable;
 }
 .page-wrap { position: relative; box-shadow: var(--page-shadow); background: #fff; }
 .page-wrap canvas { display: block; }

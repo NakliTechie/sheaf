@@ -169,6 +169,11 @@ button { font-family: inherit; font-size: inherit; color: inherit; }
   flex: 1; min-width: 0; overflow: auto; background: var(--canvas-bg);
   padding: var(--sp-5) var(--sp-4); display: flex; flex-direction: column;
   align-items: center; gap: var(--sp-5);
+  /* Reserve the scrollbar gutter so clientWidth never changes when content
+     appears/disappears. Without this, a render adds a scrollbar → clientWidth
+     shrinks → the ResizeObserver re-renders → content toggles the scrollbar → a
+     feedback loop where no render completes (blank viewport after every op). */
+  scrollbar-gutter: stable;
 }
 .page-wrap { position: relative; box-shadow: var(--page-shadow); background: #fff; }
 .page-wrap canvas { display: block; }
@@ -3396,6 +3401,7 @@ const renderPage = __m_core_render.renderPage;
 const currentRenderDoc = __m_ui_rendoc.currentRenderDoc;
 
 const PAD = 16;
+const MAX_FIT_WIDTH = 1100; // px — fit-width never renders a page wider than this
 let viewport = null;
 let renderToken = 0;
 let lastRenderWidth = 0;
@@ -3427,7 +3433,9 @@ function scaleForPage(p) {
   const avail = viewport.clientWidth - PAD * 2;
   const availH = viewport.clientHeight - PAD * 2;
   switch (state.view.fitMode) {
-    case 'width':  return Math.max(0.1, avail / p.width);
+    // Cap fit-width so a small page doesn't balloon to absurd zoom on a wide monitor
+    // (a 420pt page on a 2000px viewport would otherwise be ~450%). Pages stay centered.
+    case 'width':  return Math.max(0.1, Math.min(avail, MAX_FIT_WIDTH) / p.width);
     case 'page':   return Math.max(0.1, Math.min(avail / p.width, availH / p.height));
     case 'actual': return 1.0;
     default:       return state.view.zoom; // 'custom'
