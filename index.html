@@ -260,6 +260,12 @@ button { font-family: inherit; font-size: inherit; color: inherit; }
   width: 0; transition: width .2s; z-index: 90;
 }
 
+.recovery-banner {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  padding: 8px var(--sp-4); background: var(--accent-soft); border-bottom: 1px solid var(--panel-border);
+  font-size: 13px;
+}
+
 </style>
 </head>
 <body>
@@ -519,9 +525,9 @@ const __m_core_state = (() => {
 //
 // One mutable `state` object the whole app reads. The open document is a SheafDoc
 // (or null). History is the op-log. Preferences persist to localStorage — and ONLY
-// preferences: never PDF content, page bytes, extracted text, or form values. In v1.0
-// document bytes live only in memory (OPFS crash-staging is scaffolded but unwired —
-// see storage.js); they are never written here or to durable storage.
+// preferences: never PDF content, page bytes, extracted text, or form values. Document
+// bytes live in memory and, transiently, in OPFS crash-staging (ui/recovery.js, cleared
+// on save/close) — never durably persisted, and never written here.
 
 const History = __m_core_history.History;
 const emit = __m_core_events.emit;
@@ -3004,12 +3010,12 @@ async function saveSidecar(dirHandle, bytes, baseName) {
   return name;
 }
 
-// ── OPFS crash-recovery staging ──────────────────────────────────────────────────
-// SCAFFOLDING — defined as part of the storage façade but NOT wired in v1.0 (no caller
-// stages or recovers). When wired (a later milestone), this becomes the one place PDF
-// bytes touch disk, and only transiently: clearStage() MUST run on clean save/close so
-// the "no PDF content persisted" invariant holds. Until then, document bytes never
-// reach OPFS — they live only in memory.
+// ── OPFS crash-recovery staging (wired in ui/recovery.js) ────────────────────────
+// This is the ONE place PDF bytes touch disk, and only transiently: ui/recovery.js
+// stages the working bytes here on edits (debounced) and clearStage()s on save / open /
+// close. So bytes live on disk only as in-flight UNSAVED work; the moment you save, the
+// stage is wiped. The "no PDF content persisted" invariant holds — this is recovery
+// staging, not durable persistence.
 
 const STAGE_FILE = 'sheaf-working.pdf';
 const STAGE_META = 'sheaf-working.json';
@@ -5396,6 +5402,70 @@ function wireGlobalDrop() {
 return { initWelcome };
 })();
 
+/* ui/recovery.js */
+const __m_ui_recovery = (() => {
+// recovery.js — crash recovery via the OPFS staging layer. While you have unsaved
+// edits, the working bytes are staged to OPFS (debounced); if the tab crashes or is
+// closed before saving, the next visit offers to recover them. The stage is CLEARED
+// the moment you save (or discard) — so PDF bytes only ever live on disk transiently,
+// as in-flight unsaved work, never as durable persistence. This is the one place a
+// document's bytes touch disk, and it is self-cleaning.
+
+const state = __m_core_state.state;
+const on = __m_core_events.on;
+const storage = __m_core_storage;
+const el = __m_ui_dom.el;
+const openBytes = __m_ui_fileops.openBytes;
+
+const STAGE_DEBOUNCE = 3000;
+let timer = null;
+
+async function initRecovery() {
+  if (!storage.hasOPFS) return; // no OPFS → no crash staging (Firefox/Safari degrade)
+
+  on('doc:changed', scheduleStage);              // edits → stage soon
+  on('dirty:changed', ({ dirty }) => { if (!dirty) { clearTimeout(timer); storage.clearStage(); } }); // saved/opened → safe, clear
+  on('doc:closed', () => { clearTimeout(timer); storage.clearStage(); });
+
+  // Offer recovery on boot, BEFORE any document loads (a fresh open clears the stage).
+  try {
+    const staged = await storage.recoverStaged();
+    if (staged?.bytes?.length) offerRecovery(staged);
+  } catch {}
+}
+
+function scheduleStage() {
+  if (!state.doc) return;
+  clearTimeout(timer);
+  timer = setTimeout(async () => {
+    if (!state.dirty || !state.doc) return;
+    try { await storage.stageWorking(await state.doc.toBytes(), { fileName: state.session.fileName }); } catch {}
+  }, STAGE_DEBOUNCE);
+}
+
+function offerRecovery(staged) {
+  const name = staged.meta?.fileName || 'an untitled document';
+  const banner = el('div', { class: 'recovery-banner', role: 'alert' }, [
+    el('span', { html: `Unsaved changes to <b>${escapeHtml(name)}</b> from your last session were found.` }),
+    el('div', { style: 'display:flex;gap:8px' }, [
+      el('button', {
+        class: 'btn primary', onClick: async () => { banner.remove(); await openBytes(staged.bytes, name); },
+      }, ['Recover']),
+      el('button', { class: 'btn', onClick: () => { banner.remove(); storage.clearStage(); } }, ['Discard']),
+    ]),
+  ]);
+  const app = document.getElementById('app');
+  app.insertBefore(banner, app.querySelector('#welcome'));
+  // If the user opens something else instead, drop the banner (the stage gets superseded
+  // by the new doc's edits, or cleared on its save).
+  on('doc:loaded', () => banner.remove());
+}
+
+function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+return { initRecovery };
+})();
+
 /* app.js */
 const __m_app = (() => {
 // app.js — bootstrap. Probe → prefs → error net → register ops → init UI → wire the
@@ -5426,6 +5496,7 @@ const initThumbs = __m_ui_thumbs.initThumbs;
 const initAnnotateTools = __m_ui_annotate_tools.initAnnotateTools;
 const setTool = __m_ui_annotate_tools.setTool;
 const initWelcome = __m_ui_welcome.initWelcome;
+const initRecovery = __m_ui_recovery.initRecovery;
 const openPdf = __m_ui_fileops.openPdf;
 const savePdf = __m_ui_fileops.savePdf;
 const savePdfAs = __m_ui_fileops.savePdfAs;
@@ -5504,6 +5575,7 @@ function boot() {
   initWelcome();
 
   wireKeyboard();
+  initRecovery();
   refreshAgentFace();
   handleUrlMode();
   // Detect the AI ladder in the background (probes localhost; quiet if nothing's there).

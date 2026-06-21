@@ -19,6 +19,7 @@ import { initViewer, zoomBy, setFitMode, scrollToPage } from './ui/viewer.js';
 import { initThumbs } from './ui/thumbs.js';
 import { initAnnotateTools, setTool } from './ui/annotate-tools.js';
 import { initWelcome } from './ui/welcome.js';
+import { initRecovery } from './ui/recovery.js';
 import { openPdf, savePdf, savePdfAs, openFolder, nextFile, prevFile } from './ui/fileops.js';
 import { openHelp } from './ui/help.js';
 
@@ -92,6 +93,7 @@ function boot() {
   initWelcome();
 
   wireKeyboard();
+  initRecovery();
   refreshAgentFace();
   handleUrlMode();
   // Detect the AI ladder in the background (probes localhost; quiet if nothing's there).

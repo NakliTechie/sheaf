@@ -208,12 +208,12 @@ export async function saveSidecar(dirHandle, bytes, baseName) {
   return name;
 }
 
-// ── OPFS crash-recovery staging ──────────────────────────────────────────────────
-// SCAFFOLDING — defined as part of the storage façade but NOT wired in v1.0 (no caller
-// stages or recovers). When wired (a later milestone), this becomes the one place PDF
-// bytes touch disk, and only transiently: clearStage() MUST run on clean save/close so
-// the "no PDF content persisted" invariant holds. Until then, document bytes never
-// reach OPFS — they live only in memory.
+// ── OPFS crash-recovery staging (wired in ui/recovery.js) ────────────────────────
+// This is the ONE place PDF bytes touch disk, and only transiently: ui/recovery.js
+// stages the working bytes here on edits (debounced) and clearStage()s on save / open /
+// close. So bytes live on disk only as in-flight UNSAVED work; the moment you save, the
+// stage is wiped. The "no PDF content persisted" invariant holds — this is recovery
+// staging, not durable persistence.
 
 const STAGE_FILE = 'sheaf-working.pdf';
 const STAGE_META = 'sheaf-working.json';

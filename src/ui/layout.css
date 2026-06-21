@@ -158,3 +158,9 @@
   position: fixed; top: 0; left: 0; height: 2px; background: var(--accent);
   width: 0; transition: width .2s; z-index: 90;
 }
+
+.recovery-banner {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  padding: 8px var(--sp-4); background: var(--accent-soft); border-bottom: 1px solid var(--panel-border);
+  font-size: 13px;
+}

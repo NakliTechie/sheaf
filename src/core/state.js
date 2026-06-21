@@ -2,9 +2,9 @@
 //
 // One mutable `state` object the whole app reads. The open document is a SheafDoc
 // (or null). History is the op-log. Preferences persist to localStorage — and ONLY
-// preferences: never PDF content, page bytes, extracted text, or form values. In v1.0
-// document bytes live only in memory (OPFS crash-staging is scaffolded but unwired —
-// see storage.js); they are never written here or to durable storage.
+// preferences: never PDF content, page bytes, extracted text, or form values. Document
+// bytes live in memory and, transiently, in OPFS crash-staging (ui/recovery.js, cleared
+// on save/close) — never durably persisted, and never written here.
 
 import { History } from './history.js';
 import { emit, on } from './events.js';
