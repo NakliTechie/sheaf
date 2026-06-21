@@ -1,0 +1,19 @@
+# Working notes — local only, never pushed
+plan/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Editor / tooling
+.vscode/
+.idea/
+*.swp
+*~
+
+# Engines are vendored same-origin under /engines (committed when added),
+# but never commit fetched node_modules or build caches.
+node_modules/
+.cache/
