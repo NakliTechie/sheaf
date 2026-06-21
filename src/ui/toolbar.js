@@ -15,6 +15,7 @@ import { openPdf, newBlank, savePdf, savePdfAs, mergePdf } from './fileops.js';
 import { openSettings } from './settings.js';
 import { openHelp } from './help.js';
 import { openMarksMenu } from './marksmenu.js';
+import { setTool, currentTool, toolSettings } from './annotate-tools.js';
 
 let bar = null;
 const need = [];   // buttons needing a document
@@ -33,6 +34,17 @@ function btn(iconName, label, onClick, { needsDoc = false, danger = false, id = 
   return b;
 }
 
+// Annotation tool toggle button. tool === null → the select/cursor (clears the tool).
+function toolBtn(iconName, tool, label) {
+  const b = el('button', {
+    class: 'btn icon tool', title: label, 'aria-label': label, 'aria-pressed': 'false',
+    dataset: { tool: tool || 'cursor' },
+    onClick: () => setTool(currentTool() === tool ? null : tool),
+  }, [el('span', { html: icon(iconName) })]);
+  need.push(b);
+  return b;
+}
+
 export function initToolbar() {
   bar = document.getElementById('toolbar');
   const v = document.getElementById('app').dataset.version || '';
@@ -43,7 +55,17 @@ export function initToolbar() {
   on('session:changed', refresh);
   on('history:changed', refresh);
   on('dirty:changed', refresh);
+  on('tool:changed', ({ tool }) => reflectTool(tool));
   refresh();
+}
+
+function reflectTool(tool) {
+  if (!toolsGroup) return;
+  for (const b of toolsGroup.querySelectorAll('button.tool')) {
+    const isActive = b.dataset.tool === (tool || 'cursor');
+    b.classList.toggle('active', isActive);
+    b.setAttribute('aria-pressed', String(isActive));
+  }
 }
 
 function render(version) {
@@ -75,6 +97,17 @@ function render(version) {
       btn('mark', '', openMarksMenu, { needsDoc: true }),
       btn('info', '', onMetadata, { needsDoc: true }),
     ]),
+    el('div.sep'),
+    (toolsGroup = el('div.group', {}, [
+      toolBtn('cursor', null, 'Select'),
+      toolBtn('highlight', 'highlight', 'Highlight'),
+      toolBtn('square', 'rect', 'Rectangle'),
+      toolBtn('line', 'line', 'Line'),
+      toolBtn('pencil', 'pencil', 'Draw'),
+      toolBtn('textbox', 'text', 'Text'),
+      el('input', { type: 'color', value: toolSettings.color, title: 'Annotation colour', class: 'color-swatch',
+        onInput: (e) => { toolSettings.color = e.target.value; } }),
+    ])),
 
     el('div.spacer'),
     (fname = el('div.fname', { text: '' })),
@@ -87,7 +120,7 @@ function render(version) {
   );
 }
 
-let undoBtn, redoBtn, fname;
+let undoBtn, redoBtn, fname, toolsGroup;
 
 function refresh() {
   const open = !!state.doc;

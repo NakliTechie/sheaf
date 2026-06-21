@@ -7,6 +7,7 @@ import { ops as openOps } from './open.js';
 import { ops as pageOps } from './pages.js';
 import { ops as metadataOps } from './metadata.js';
 import { ops as marksOps } from './marks.js';
+import { ops as annotateOps } from './annotate.js';
 
 export function registerOps() {
   registerAll([
@@ -14,5 +15,6 @@ export function registerOps() {
     ...pageOps,
     ...metadataOps,
     ...marksOps,
+    ...annotateOps,
   ]);
 }

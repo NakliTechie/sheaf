@@ -16,6 +16,7 @@ import { initStatusbar } from './ui/statusbar.js';
 import { initRenderDoc } from './ui/rendoc.js';
 import { initViewer, zoomBy, setFitMode, scrollToPage } from './ui/viewer.js';
 import { initThumbs } from './ui/thumbs.js';
+import { initAnnotateTools, setTool } from './ui/annotate-tools.js';
 import { initWelcome } from './ui/welcome.js';
 import { openPdf, savePdf, savePdfAs } from './ui/fileops.js';
 import { openHelp } from './ui/help.js';
@@ -45,6 +46,14 @@ function wireKeyboard() {
     .register('0', () => setFitMode('width'), { context: 'viewer', label: 'Fit width' })
     .register('arrowdown', () => scrollToPage(Math.min(state.view.pageIndex + 1, state.doc.pageCount() - 1)), { context: 'viewer' })
     .register('arrowup', () => scrollToPage(Math.max(state.view.pageIndex - 1, 0)), { context: 'viewer' })
+    // Annotation tools (bare keys, viewer context, suppressed while typing).
+    .register('v', () => setTool(null), { context: 'viewer', label: 'Select' })
+    .register('h', () => setTool('highlight'), { context: 'viewer', label: 'Highlight' })
+    .register('r', () => setTool('rect'), { context: 'viewer', label: 'Rectangle' })
+    .register('l', () => setTool('line'), { context: 'viewer', label: 'Line' })
+    .register('d', () => setTool('pencil'), { context: 'viewer', label: 'Draw' })
+    .register('t', () => setTool('text'), { context: 'viewer', label: 'Text box' })
+    .register('escape', () => setTool(null), { context: 'viewer' })
     .attach(window);
 }
 
@@ -71,6 +80,7 @@ function boot() {
   initRenderDoc();
   initViewer();
   initThumbs();
+  initAnnotateTools();
   initStatusbar();
   initToolbar();
   initWelcome();

@@ -50,9 +50,12 @@ export async function renderPage(pdf, pageIndex, scale, canvas) {
   let timer;
   const timeout = new Promise((res) => { timer = setTimeout(() => res({ timedOut: true }), RENDER_TIMEOUT_MS); });
   try {
+    // Do NOT cancel on timeout: PDF.js paints the canvas incrementally as the
+    // operator list executes, so even if the promise is pathologically slow to settle
+    // the page is usually already visible. Cancelling would abort that paint. We just
+    // stop blocking the viewport on it and let the orphaned task finish painting.
     const r = await Promise.race([task.promise.then(() => ({ ok: true })), timeout]);
-    if (r.timedOut) { try { task.cancel(); } catch {} return { width: viewport.width, height: viewport.height, timedOut: true }; }
-    return { width: viewport.width, height: viewport.height };
+    return { width: viewport.width, height: viewport.height, timedOut: !!r.timedOut };
   } finally { clearTimeout(timer); }
 }
 

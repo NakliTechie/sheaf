@@ -131,6 +131,13 @@ button { font-family: inherit; font-size: inherit; color: inherit; }
 .btn.danger:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
 .btn svg { width: 18px; height: 18px; display: block; }
 .btn .label { font-size: 13px; }
+.btn.tool.active { background: var(--accent); color: var(--accent-fg); }
+.color-swatch { width: 28px; height: 28px; padding: 0; border: 1px solid var(--panel-border); border-radius: var(--r-sm); background: none; cursor: pointer; }
+
+/* Annotation drawing: crosshair over pages, live preview overlay. */
+#viewport.tool-active .page-wrap { cursor: crosshair; }
+#viewport.tool-active .page-wrap canvas { pointer-events: none; }
+.annot-preview { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
 
 /* ── Body: rail + viewport ───────────────────────────────────────────────────── */
 #body { flex: 1; display: flex; min-height: 0; }
@@ -1309,6 +1316,163 @@ const ops = [
 return { ops };
 })();
 
+/* ops/annotate.js */
+const __m_ops_annotate = (() => {
+// ops/annotate.js — annotations drawn onto the page content (pdf-lib). Coordinates
+// are NORMALIZED (0..1 fractions of page width/height, screen orientation: y down
+// from the top). The op converts to PDF points (origin bottom-left), so the same op
+// is scale- and zoom-independent — the interaction layer just captures fractions.
+//
+// These are content draws (flattened into the page), not interactive PDF annotation
+// objects — consistent with the deterministic, replayable substrate.
+
+const getEngine = __m_core_engines.getEngine;
+
+function lib() { return getEngine('pdf-lib'); }
+
+function hexToRgb(hex, fallback = [0, 0, 0]) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
+  if (!m) return fallback;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
+}
+
+function pageOf(doc, i) {
+  const count = doc.pageCount();
+  if (!Number.isInteger(i) || i < 0 || i >= count) throw new Error(`Page ${i} out of range (0..${count - 1})`);
+  return doc.pdf.getPages()[i];
+}
+
+// Normalized rect (top-left x,y + w,h, all 0..1) → pdf-lib rect (bottom-left origin).
+function rectToPdf(page, x, y, w, h) {
+  const { width: W, height: H } = page.getSize();
+  return { x: x * W, y: H * (1 - (y + h)), width: w * W, height: h * H };
+}
+function ptToPdf(page, x, y) {
+  const { width: W, height: H } = page.getSize();
+  return { x: x * W, y: H * (1 - y) };
+}
+
+const ops = [
+  {
+    id: 'annotate.highlight', label: 'Highlight', group: 'annotate', icon: 'highlight',
+    description: 'Draw a translucent highlight rectangle over a region (normalized 0..1 coords).',
+    agentCallable: true,
+    params: {
+      page: { type: 'int', required: true, min: 0 },
+      x: { type: 'number', required: true }, y: { type: 'number', required: true },
+      w: { type: 'number', required: true }, h: { type: 'number', required: true },
+      color: { type: 'string', default: '#ffe14d' }, opacity: { type: 'number', default: 0.4, min: 0.05, max: 1 },
+    },
+    run(doc, p) {
+      const { rgb } = lib();
+      const page = pageOf(doc, p.page);
+      const r = rectToPdf(page, p.x, p.y, p.w, p.h);
+      const [cr, cg, cb] = hexToRgb(p.color, [1, 0.88, 0.3]);
+      page.drawRectangle({ ...r, color: rgb(cr, cg, cb), opacity: p.opacity });
+      return { doc };
+    },
+  },
+
+  {
+    id: 'annotate.rect', label: 'Rectangle', group: 'annotate', icon: 'square',
+    description: 'Draw a rectangle outline (optionally filled) over a region.',
+    agentCallable: true,
+    params: {
+      page: { type: 'int', required: true, min: 0 },
+      x: { type: 'number', required: true }, y: { type: 'number', required: true },
+      w: { type: 'number', required: true }, h: { type: 'number', required: true },
+      color: { type: 'string', default: '#ff3b30' }, thickness: { type: 'number', default: 2, min: 0.25, max: 40 },
+      fill: { type: 'bool', default: false }, fillOpacity: { type: 'number', default: 0.2, min: 0, max: 1 },
+    },
+    run(doc, p) {
+      const { rgb } = lib();
+      const page = pageOf(doc, p.page);
+      const r = rectToPdf(page, p.x, p.y, p.w, p.h);
+      const [cr, cg, cb] = hexToRgb(p.color, [1, 0.23, 0.19]);
+      page.drawRectangle({ ...r, borderColor: rgb(cr, cg, cb), borderWidth: p.thickness, color: p.fill ? rgb(cr, cg, cb) : undefined, opacity: p.fill ? p.fillOpacity : undefined });
+      return { doc };
+    },
+  },
+
+  {
+    id: 'annotate.line', label: 'Line', group: 'annotate', icon: 'line',
+    description: 'Draw a straight line (optionally an arrow) between two points.',
+    agentCallable: true,
+    params: {
+      page: { type: 'int', required: true, min: 0 },
+      x1: { type: 'number', required: true }, y1: { type: 'number', required: true },
+      x2: { type: 'number', required: true }, y2: { type: 'number', required: true },
+      color: { type: 'string', default: '#ff3b30' }, thickness: { type: 'number', default: 2, min: 0.25, max: 40 },
+      arrow: { type: 'bool', default: false },
+    },
+    run(doc, p) {
+      const { rgb } = lib();
+      const page = pageOf(doc, p.page);
+      const [cr, cg, cb] = hexToRgb(p.color, [1, 0.23, 0.19]);
+      const color = rgb(cr, cg, cb);
+      const a = ptToPdf(page, p.x1, p.y1), b = ptToPdf(page, p.x2, p.y2);
+      page.drawLine({ start: a, end: b, thickness: p.thickness, color });
+      if (p.arrow) {
+        const ang = Math.atan2(b.y - a.y, b.x - a.x);
+        const len = 8 + p.thickness * 2;
+        for (const off of [Math.PI - 0.5, Math.PI + 0.5]) {
+          page.drawLine({ start: b, end: { x: b.x + len * Math.cos(ang + off), y: b.y + len * Math.sin(ang + off) }, thickness: p.thickness, color });
+        }
+      }
+      return { doc };
+    },
+  },
+
+  {
+    id: 'annotate.pencil', label: 'Freehand', group: 'annotate', icon: 'pencil',
+    description: 'Draw a freehand path through a list of normalized points.',
+    agentCallable: true,
+    params: {
+      page: { type: 'int', required: true, min: 0 },
+      points: { type: 'array', required: true, minItems: 2, items: { type: 'object', of: { x: { type: 'number', required: true }, y: { type: 'number', required: true } } } },
+      color: { type: 'string', default: '#ff3b30' }, thickness: { type: 'number', default: 2.5, min: 0.25, max: 40 },
+    },
+    run(doc, p) {
+      const { rgb } = lib();
+      const page = pageOf(doc, p.page);
+      const [cr, cg, cb] = hexToRgb(p.color, [1, 0.23, 0.19]);
+      const color = rgb(cr, cg, cb);
+      const pts = p.points.map(pt => ptToPdf(page, pt.x, pt.y));
+      for (let i = 1; i < pts.length; i++) page.drawLine({ start: pts[i - 1], end: pts[i], thickness: p.thickness, color });
+      return { doc };
+    },
+  },
+
+  {
+    id: 'annotate.textbox', label: 'Text box', group: 'annotate', icon: 'textbox',
+    description: 'Place typed text at a point (normalized coords; top-left of the text).',
+    agentCallable: true,
+    params: {
+      page: { type: 'int', required: true, min: 0 },
+      x: { type: 'number', required: true }, y: { type: 'number', required: true },
+      text: { type: 'string', required: true, maxLength: 2000 },
+      fontSize: { type: 'number', default: 14, min: 4, max: 200 },
+      color: { type: 'string', default: '#111111' },
+    },
+    async run(doc, p) {
+      const { rgb, StandardFonts } = lib();
+      const font = await doc.pdf.embedFont(StandardFonts.Helvetica);
+      const page = pageOf(doc, p.page);
+      const [cr, cg, cb] = hexToRgb(p.color, [0.07, 0.07, 0.07]);
+      const at = ptToPdf(page, p.x, p.y);
+      const lines = String(p.text).split('\n');
+      lines.forEach((line, i) => {
+        page.drawText(line, { x: at.x, y: at.y - p.fontSize * (i + 1), size: p.fontSize, font, color: rgb(cr, cg, cb) });
+      });
+      return { doc };
+    },
+  },
+];
+
+return { ops };
+})();
+
 /* ops/index.js */
 const __m_ops_index = (() => {
 // ops/index.js — the one place ops register into the registry. Importing a new op
@@ -1320,6 +1484,7 @@ const openOps = __m_ops_open.ops;
 const pageOps = __m_ops_pages.ops;
 const metadataOps = __m_ops_metadata.ops;
 const marksOps = __m_ops_marks.ops;
+const annotateOps = __m_ops_annotate.ops;
 
 function registerOps() {
   registerAll([
@@ -1327,6 +1492,7 @@ function registerOps() {
     ...pageOps,
     ...metadataOps,
     ...marksOps,
+    ...annotateOps,
   ]);
 }
 
@@ -1826,6 +1992,12 @@ const P = {
   zoomin:  '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4M11 8v6M8 11h6"/>',
   zoomout: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4M8 11h6"/>',
   mark:    '<path d="M20.6 8.5 8.4 20.7a2 2 0 0 1-1.7.6l-3-.4a1 1 0 0 1-.8-.8l-.4-3a2 2 0 0 1 .6-1.7L15.5 3.4a2 2 0 0 1 2.8 0l2.3 2.3a2 2 0 0 1 0 2.8z"/><path d="M14 5l5 5"/>',
+  cursor:  '<path d="M5 3l5.5 16 2.2-6.5L19 10.3z"/>',
+  highlight:'<path d="M3 21h6M9 14l-3 5 4-1 9-9-3-3-9 9z"/><path d="M14 7l3 3"/>',
+  square:  '<rect x="4" y="4" width="16" height="16" rx="1.5"/>',
+  line:    '<path d="M5 19 19 5"/>',
+  textbox: '<path d="M4 6V4h16v2M9 20h6M12 4v16"/>',
+  redact:  '<rect x="3" y="9" width="18" height="6" rx="1" fill="currentColor" stroke="none"/><path d="M3 5h18M3 19h18"/>',
 };
 
 function icon(name) {
@@ -1893,9 +2065,12 @@ async function renderPage(pdf, pageIndex, scale, canvas) {
   let timer;
   const timeout = new Promise((res) => { timer = setTimeout(() => res({ timedOut: true }), RENDER_TIMEOUT_MS); });
   try {
+    // Do NOT cancel on timeout: PDF.js paints the canvas incrementally as the
+    // operator list executes, so even if the promise is pathologically slow to settle
+    // the page is usually already visible. Cancelling would abort that paint. We just
+    // stop blocking the viewport on it and let the orphaned task finish painting.
     const r = await Promise.race([task.promise.then(() => ({ ok: true })), timeout]);
-    if (r.timedOut) { try { task.cancel(); } catch {} return { width: viewport.width, height: viewport.height, timedOut: true }; }
-    return { width: viewport.width, height: viewport.height };
+    return { width: viewport.width, height: viewport.height, timedOut: !!r.timedOut };
   } finally { clearTimeout(timer); }
 }
 
@@ -2776,6 +2951,133 @@ async function addHeaderFooter() {
 return { openMarksMenu };
 })();
 
+/* ui/annotate-tools.js */
+const __m_ui_annotate_tools = (() => {
+// annotate-tools.js — the interactive annotation layer. When a tool is active, a
+// pointer gesture on a page becomes normalized (0..1) coordinates and dispatches an
+// annotate.* op through the one runner. A live preview overlay shows the shape mid-
+// gesture; the committed draw comes back through the normal render path.
+
+const state = __m_core_state.state;
+const on = __m_core_events.on;
+const emit = __m_core_events.emit;
+const dispatch = __m_core_runner.dispatch;
+const el = __m_ui_dom.el;
+const formModal = __m_ui_modal.formModal;
+
+const DRAG_TOOLS = new Set(['highlight', 'rect', 'line', 'pencil']);
+const ALL_TOOLS = new Set([...DRAG_TOOLS, 'text']);
+
+const toolSettings = { color: '#ff3b30', highlightColor: '#ffe14d', thickness: 2 };
+
+let viewport = null;
+let active = null;
+let gesture = null;
+let preview = null;
+
+function currentTool() { return active; }
+
+function setTool(tool) {
+  active = ALL_TOOLS.has(tool) ? tool : null;
+  state.activeTool = active;
+  viewport.classList.toggle('tool-active', !!active);
+  emit('tool:changed', { tool: active });
+}
+
+function initAnnotateTools() {
+  viewport = document.getElementById('viewport');
+  viewport.addEventListener('pointerdown', onDown);
+  // A fresh document clears the active tool.
+  on('doc:loaded', () => setTool(null));
+}
+
+function wrapUnder(target) { return target?.closest?.('.page-wrap'); }
+
+function normalize(rect, clientX, clientY) {
+  return {
+    x: Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)),
+    y: Math.max(0, Math.min(1, (clientY - rect.top) / rect.height)),
+  };
+}
+
+async function onDown(e) {
+  if (!active) return;
+  const wrap = wrapUnder(e.target);
+  if (!wrap) return;
+  const canvas = wrap.querySelector('canvas');
+  const rect = canvas.getBoundingClientRect();
+  const page = Number(wrap.dataset.page);
+
+  if (active === 'text') {
+    const at = normalize(rect, e.clientX, e.clientY);
+    const v = await formModal('Text box', [
+      { name: 'text', label: 'Text', value: '' },
+      { name: 'fontSize', label: 'Size (pt)', type: 'number', value: 14 },
+    ]);
+    if (v?.text) dispatch('annotate.textbox', { page, x: at.x, y: at.y, text: v.text, fontSize: v.fontSize, color: toolSettings.color });
+    return;
+  }
+
+  e.preventDefault();
+  const start = normalize(rect, e.clientX, e.clientY);
+  gesture = { wrap, page, rect, start, cur: null, points: [start] };
+  preview = el('div', { class: 'annot-preview' });
+  wrap.style.position = 'relative';
+  wrap.appendChild(preview);
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onUp, { once: true });
+}
+
+function onMove(e) {
+  if (!gesture) return;
+  gesture.cur = normalize(gesture.rect, e.clientX, e.clientY);
+  gesture.points.push(gesture.cur);
+  drawPreview();
+}
+
+function drawPreview() {
+  const { start, cur, points } = gesture;
+  if (active === 'pencil') {
+    const d = points.map((p, i) => `${i ? 'L' : 'M'}${(p.x * 100).toFixed(2)} ${(p.y * 100).toFixed(2)}`).join(' ');
+    preview.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%"><path d="${d}" fill="none" stroke="${toolSettings.color}" stroke-width="0.4"/></svg>`;
+    return;
+  }
+  if (!cur) return;
+  if (active === 'highlight' || active === 'rect') {
+    const x = Math.min(start.x, cur.x), y = Math.min(start.y, cur.y), w = Math.abs(cur.x - start.x), h = Math.abs(cur.y - start.y);
+    const style = active === 'highlight'
+      ? `background:${toolSettings.highlightColor};opacity:.4`
+      : `border:2px solid ${toolSettings.color}`;
+    preview.innerHTML = `<div style="position:absolute;left:${x * 100}%;top:${y * 100}%;width:${w * 100}%;height:${h * 100}%;${style}"></div>`;
+  } else if (active === 'line') {
+    preview.innerHTML = `<svg style="position:absolute;inset:0;width:100%;height:100%"><line x1="${start.x * 100}%" y1="${start.y * 100}%" x2="${cur.x * 100}%" y2="${cur.y * 100}%" stroke="${toolSettings.color}" stroke-width="2"/></svg>`;
+  }
+}
+
+function onUp() {
+  window.removeEventListener('pointermove', onMove);
+  if (!gesture) return;
+  const g = gesture; gesture = null;
+  if (preview) { preview.remove(); preview = null; }
+  const { start, cur, points, page } = g;
+
+  if (active === 'highlight' || active === 'rect') {
+    if (!cur) return;
+    const x = Math.min(start.x, cur.x), y = Math.min(start.y, cur.y), w = Math.abs(cur.x - start.x), h = Math.abs(cur.y - start.y);
+    if (w < 0.005 || h < 0.005) return; // ignore stray clicks
+    if (active === 'highlight') dispatch('annotate.highlight', { page, x, y, w, h, color: toolSettings.highlightColor });
+    else dispatch('annotate.rect', { page, x, y, w, h, color: toolSettings.color, thickness: toolSettings.thickness });
+  } else if (active === 'line') {
+    if (!cur) return;
+    dispatch('annotate.line', { page, x1: start.x, y1: start.y, x2: cur.x, y2: cur.y, color: toolSettings.color, thickness: toolSettings.thickness });
+  } else if (active === 'pencil') {
+    if (points.length >= 2) dispatch('annotate.pencil', { page, points, color: toolSettings.color, thickness: toolSettings.thickness });
+  }
+}
+
+return { toolSettings, currentTool, setTool, initAnnotateTools };
+})();
+
 /* ui/toolbar.js */
 const __m_ui_toolbar = (() => {
 // toolbar.js — the top chrome. Buttons dispatch through the runner (the same door
@@ -2805,6 +3107,9 @@ const mergePdf = __m_ui_fileops.mergePdf;
 const openSettings = __m_ui_settings.openSettings;
 const openHelp = __m_ui_help.openHelp;
 const openMarksMenu = __m_ui_marksmenu.openMarksMenu;
+const setTool = __m_ui_annotate_tools.setTool;
+const currentTool = __m_ui_annotate_tools.currentTool;
+const toolSettings = __m_ui_annotate_tools.toolSettings;
 
 let bar = null;
 const need = [];   // buttons needing a document
@@ -2823,6 +3128,17 @@ function btn(iconName, label, onClick, { needsDoc = false, danger = false, id = 
   return b;
 }
 
+// Annotation tool toggle button. tool === null → the select/cursor (clears the tool).
+function toolBtn(iconName, tool, label) {
+  const b = el('button', {
+    class: 'btn icon tool', title: label, 'aria-label': label, 'aria-pressed': 'false',
+    dataset: { tool: tool || 'cursor' },
+    onClick: () => setTool(currentTool() === tool ? null : tool),
+  }, [el('span', { html: icon(iconName) })]);
+  need.push(b);
+  return b;
+}
+
 function initToolbar() {
   bar = document.getElementById('toolbar');
   const v = document.getElementById('app').dataset.version || '';
@@ -2833,7 +3149,17 @@ function initToolbar() {
   on('session:changed', refresh);
   on('history:changed', refresh);
   on('dirty:changed', refresh);
+  on('tool:changed', ({ tool }) => reflectTool(tool));
   refresh();
+}
+
+function reflectTool(tool) {
+  if (!toolsGroup) return;
+  for (const b of toolsGroup.querySelectorAll('button.tool')) {
+    const isActive = b.dataset.tool === (tool || 'cursor');
+    b.classList.toggle('active', isActive);
+    b.setAttribute('aria-pressed', String(isActive));
+  }
 }
 
 function render(version) {
@@ -2865,6 +3191,17 @@ function render(version) {
       btn('mark', '', openMarksMenu, { needsDoc: true }),
       btn('info', '', onMetadata, { needsDoc: true }),
     ]),
+    el('div.sep'),
+    (toolsGroup = el('div.group', {}, [
+      toolBtn('cursor', null, 'Select'),
+      toolBtn('highlight', 'highlight', 'Highlight'),
+      toolBtn('square', 'rect', 'Rectangle'),
+      toolBtn('line', 'line', 'Line'),
+      toolBtn('pencil', 'pencil', 'Draw'),
+      toolBtn('textbox', 'text', 'Text'),
+      el('input', { type: 'color', value: toolSettings.color, title: 'Annotation colour', class: 'color-swatch',
+        onInput: (e) => { toolSettings.color = e.target.value; } }),
+    ])),
 
     el('div.spacer'),
     (fname = el('div.fname', { text: '' })),
@@ -2877,7 +3214,7 @@ function render(version) {
   );
 }
 
-let undoBtn, redoBtn, fname;
+let undoBtn, redoBtn, fname, toolsGroup;
 
 function refresh() {
   const open = !!state.doc;
@@ -3108,6 +3445,8 @@ const zoomBy = __m_ui_viewer.zoomBy;
 const setFitMode = __m_ui_viewer.setFitMode;
 const scrollToPage = __m_ui_viewer.scrollToPage;
 const initThumbs = __m_ui_thumbs.initThumbs;
+const initAnnotateTools = __m_ui_annotate_tools.initAnnotateTools;
+const setTool = __m_ui_annotate_tools.setTool;
 const initWelcome = __m_ui_welcome.initWelcome;
 const openPdf = __m_ui_fileops.openPdf;
 const savePdf = __m_ui_fileops.savePdf;
@@ -3139,6 +3478,14 @@ function wireKeyboard() {
     .register('0', () => setFitMode('width'), { context: 'viewer', label: 'Fit width' })
     .register('arrowdown', () => scrollToPage(Math.min(state.view.pageIndex + 1, state.doc.pageCount() - 1)), { context: 'viewer' })
     .register('arrowup', () => scrollToPage(Math.max(state.view.pageIndex - 1, 0)), { context: 'viewer' })
+    // Annotation tools (bare keys, viewer context, suppressed while typing).
+    .register('v', () => setTool(null), { context: 'viewer', label: 'Select' })
+    .register('h', () => setTool('highlight'), { context: 'viewer', label: 'Highlight' })
+    .register('r', () => setTool('rect'), { context: 'viewer', label: 'Rectangle' })
+    .register('l', () => setTool('line'), { context: 'viewer', label: 'Line' })
+    .register('d', () => setTool('pencil'), { context: 'viewer', label: 'Draw' })
+    .register('t', () => setTool('text'), { context: 'viewer', label: 'Text box' })
+    .register('escape', () => setTool(null), { context: 'viewer' })
     .attach(window);
 }
 
@@ -3165,6 +3512,7 @@ function boot() {
   initRenderDoc();
   initViewer();
   initThumbs();
+  initAnnotateTools();
   initStatusbar();
   initToolbar();
   initWelcome();

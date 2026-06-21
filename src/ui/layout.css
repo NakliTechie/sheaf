@@ -34,6 +34,13 @@
 .btn.danger:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
 .btn svg { width: 18px; height: 18px; display: block; }
 .btn .label { font-size: 13px; }
+.btn.tool.active { background: var(--accent); color: var(--accent-fg); }
+.color-swatch { width: 28px; height: 28px; padding: 0; border: 1px solid var(--panel-border); border-radius: var(--r-sm); background: none; cursor: pointer; }
+
+/* Annotation drawing: crosshair over pages, live preview overlay. */
+#viewport.tool-active .page-wrap { cursor: crosshair; }
+#viewport.tool-active .page-wrap canvas { pointer-events: none; }
+.annot-preview { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
 
 /* ── Body: rail + viewport ───────────────────────────────────────────────────── */
 #body { flex: 1; display: flex; min-height: 0; }

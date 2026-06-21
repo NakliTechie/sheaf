@@ -25,6 +25,12 @@ const P = {
   zoomin:  '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4M11 8v6M8 11h6"/>',
   zoomout: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4M8 11h6"/>',
   mark:    '<path d="M20.6 8.5 8.4 20.7a2 2 0 0 1-1.7.6l-3-.4a1 1 0 0 1-.8-.8l-.4-3a2 2 0 0 1 .6-1.7L15.5 3.4a2 2 0 0 1 2.8 0l2.3 2.3a2 2 0 0 1 0 2.8z"/><path d="M14 5l5 5"/>',
+  cursor:  '<path d="M5 3l5.5 16 2.2-6.5L19 10.3z"/>',
+  highlight:'<path d="M3 21h6M9 14l-3 5 4-1 9-9-3-3-9 9z"/><path d="M14 7l3 3"/>',
+  square:  '<rect x="4" y="4" width="16" height="16" rx="1.5"/>',
+  line:    '<path d="M5 19 19 5"/>',
+  textbox: '<path d="M4 6V4h16v2M9 20h6M12 4v16"/>',
+  redact:  '<rect x="3" y="9" width="18" height="6" rx="1" fill="currentColor" stroke="none"/><path d="M3 5h18M3 19h18"/>',
 };
 
 export function icon(name) {
