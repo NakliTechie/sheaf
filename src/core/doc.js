@@ -60,8 +60,12 @@ export class SheafDoc {
     };
   }
 
-  // Serialize to bytes. useObjectStreams keeps output compact + deterministic.
-  async toBytes() { return await this._pdf.save({ useObjectStreams: true }); }
+  // Serialize to bytes. updateMetadata:false is REQUIRED, not optional: pdf-lib
+  // otherwise stamps ModificationDate (and its own Producer) on every save — which
+  // (a) silently rewrites the user's file metadata, forbidden by the sovereignty
+  // rules, and (b) makes the same document serialize differently second-to-second,
+  // breaking replay determinism. useObjectStreams keeps the output compact.
+  async toBytes() { return await this._pdf.save({ useObjectStreams: true, updateMetadata: false }); }
 
   // A semantic fingerprint of document state: page geometry + metadata. This is the
   // equality the M0 replay gate checks ("state reconstructed"), robust to byte-level

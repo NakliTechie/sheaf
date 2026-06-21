@@ -21,12 +21,31 @@ function assertPages(indices, count) {
 }
 
 // Build a new SheafDoc by copying pages from src in the given index order.
+// copyPages copies page content only — it does NOT carry the document's Info dict.
+// We must copy metadata across, or reordering/extracting would silently wipe the
+// user's title/author/dates AND stamp a fresh modification date (PDFDocument.create()
+// sets it to "now"), which would also break replay determinism.
 async function rebuildFromOrder(src, order) {
   const { PDFDocument } = lib();
   const out = await PDFDocument.create();
+  carryMetadata(src.pdf, out);
   const copied = await out.copyPages(src.pdf, order);
   copied.forEach(p => out.addPage(p));
   return new SheafDoc(out, null);
+}
+
+function carryMetadata(src, out) {
+  const move = (get, set, transform) => {
+    try { const v = src[get](); if (v != null) out[set](transform ? transform(v) : v); } catch {}
+  };
+  move('getTitle', 'setTitle');
+  move('getAuthor', 'setAuthor');
+  move('getSubject', 'setSubject');
+  move('getCreator', 'setCreator');
+  move('getProducer', 'setProducer');
+  move('getKeywords', 'setKeywords', (v) => Array.isArray(v) ? v : String(v).split(',').map(s => s.trim()).filter(Boolean));
+  move('getCreationDate', 'setCreationDate');
+  move('getModificationDate', 'setModificationDate');
 }
 
 export const ops = [

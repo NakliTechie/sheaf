@@ -21,13 +21,18 @@ let passed = 0, failed = 0;
 function ok(name, cond) { if (cond) { passed++; console.log(`  ✓ ${name}`); } else { failed++; console.log(`  ✗ ${name}`); } }
 function eq(name, a, b) { const r = JSON.stringify(a) === JSON.stringify(b); if (!r) console.log(`    expected ${JSON.stringify(b)}\n    got      ${JSON.stringify(a)}`); ok(name, r); }
 
+const FIXED_DATE = new Date('2020-01-01T00:00:00Z');
+
 async function makeSamplePdf(n) {
   const d = await PDFDocument.create();
   for (let i = 0; i < n; i++) {
     const p = d.addPage([300 + i * 10, 400]);
     p.drawText(`Original page ${i + 1}`, { x: 40, y: 360 });
   }
-  return await d.save();
+  // Pin the dates so we can prove toBytes() never silently re-stamps them.
+  d.setCreationDate(FIXED_DATE);
+  d.setModificationDate(FIXED_DATE);
+  return await d.save({ updateMetadata: false });
 }
 
 async function main() {
@@ -64,6 +69,13 @@ async function main() {
   const liveFp = state.doc.fingerprint();
   ok('live doc has 6 pages', liveFp.pageCount === 6);
   ok('metadata title set', liveFp.meta.title === 'Replayed');
+  // Regression guard: pdf-lib's getPages() cache goes stale after in-place
+  // removePage/insertPage. The runner normalizes every op through its bytes, so
+  // pages().length and pageCount() must always agree.
+  ok('pages().length === pageCount() (no stale getPages cache)', state.doc.pages().length === state.doc.pageCount());
+  // toBytes() must NOT re-stamp the modification date (sovereignty + replay determinism).
+  // After 8 ops + normalization round-trips, the pinned 2020 date must survive.
+  ok('modificationDate not silently re-stamped', String(state.doc.getMetadata().modificationDate || '').startsWith('2020-01-01'));
 
   console.log('\nM0 GATE — replay the whole op-log from the floor');
   const replayed = await replayFromFloor();

@@ -1,0 +1,2961 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Sheaf — PDF editor</title>
+  <meta name="description" content="Browser-native PDF editor. One file. No account, no upload, no telemetry, no limits.">
+  <meta name="sheaf-version" content="0.1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; worker-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'">
+  <style>
+/* ui/theme.css */
+/* theme.css — design tokens (nakli-creative-primitives convention). Every colour,
+   space, and radius is a custom property; a new theme is one [data-theme] block,
+   never a refactor. Dark is the default (high-contrast a11y per handoff §11). */
+
+:root,
+:root[data-theme="dark"] {
+  --bg:            #14161a;
+  --bg-raised:     #1c1f25;
+  --bg-sunken:     #0f1114;
+  --panel:         #1c1f25;
+  --panel-border:  #2b2f37;
+  --canvas-bg:     #0b0c0f;
+
+  --fg:            #e7e9ee;
+  --fg-muted:      #9aa1ad;
+  --fg-faint:      #6b7280;
+
+  --accent:        #5b8cff;
+  --accent-fg:     #ffffff;
+  --accent-soft:   #21304f;
+
+  --danger:        #ff5c5c;
+  --danger-soft:   #3a1f22;
+  --warn:          #ffb454;
+  --ok:            #4ec98f;
+
+  --page-shadow:   0 2px 14px rgba(0,0,0,.55);
+  --overlay:       rgba(8,9,11,.66);
+
+  --r-sm: 5px;  --r-md: 9px;  --r-lg: 14px;
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px;  --sp-4: 16px;  --sp-5: 24px;  --sp-6: 36px;
+
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  --toolbar-h: 52px;
+  --rail-w: 168px;
+  --shadow-pop: 0 10px 40px rgba(0,0,0,.5);
+}
+
+:root[data-theme="light"] {
+  --bg:            #f4f5f7;
+  --bg-raised:     #ffffff;
+  --bg-sunken:     #e9ebef;
+  --panel:         #ffffff;
+  --panel-border:  #d9dce2;
+  --canvas-bg:     #cfd3da;
+
+  --fg:            #1a1d23;
+  --fg-muted:      #5b626d;
+  --fg-faint:      #8b919c;
+
+  --accent:        #2f6bff;
+  --accent-fg:     #ffffff;
+  --accent-soft:   #dbe6ff;
+
+  --danger:        #d23b3b;
+  --danger-soft:   #fbe3e3;
+  --warn:          #b9760f;
+  --ok:            #1f9d62;
+
+  --page-shadow:   0 2px 12px rgba(20,30,50,.18);
+  --overlay:       rgba(20,24,32,.4);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0; height: 100%;
+  background: var(--bg); color: var(--fg);
+  font-family: var(--font); font-size: 14px; line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button { font-family: inherit; font-size: inherit; color: inherit; }
+
+.visually-hidden {
+  position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+
+/* ui/layout.css */
+/* layout.css — the shell: toolbar, thumbnail rail, scrolling page viewport, status
+   bar, toasts, modals. Dim-never-hide for the canvas/thumb layouts (handoff §8). */
+
+#app { display: flex; flex-direction: column; height: 100%; }
+
+/* ── Toolbar ─────────────────────────────────────────────────────────────────── */
+#toolbar {
+  height: var(--toolbar-h); flex: 0 0 auto;
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: 0 var(--sp-3);
+  background: var(--bg-raised); border-bottom: 1px solid var(--panel-border);
+  user-select: none;
+}
+#toolbar .brand { display: flex; align-items: baseline; gap: 6px; margin-right: var(--sp-3); }
+#toolbar .brand b { font-size: 16px; letter-spacing: .3px; }
+#toolbar .brand .ver { font-size: 11px; color: var(--fg-faint); }
+#toolbar .group { display: flex; align-items: center; gap: 4px; }
+#toolbar .sep { width: 1px; height: 24px; background: var(--panel-border); margin: 0 var(--sp-1); }
+#toolbar .spacer { flex: 1; }
+#toolbar .fname { color: var(--fg-muted); font-size: 12px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#toolbar .fname .dot { color: var(--warn); }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 34px; padding: 0 10px; border-radius: var(--r-sm);
+  background: transparent; border: 1px solid transparent; color: var(--fg);
+  cursor: pointer; white-space: nowrap;
+}
+.btn:hover:not(:disabled) { background: var(--bg-sunken); }
+.btn:disabled { opacity: .38; cursor: default; }
+.btn.primary { background: var(--accent); color: var(--accent-fg); }
+.btn.primary:hover:not(:disabled) { filter: brightness(1.08); }
+.btn.icon { padding: 0; width: 34px; justify-content: center; }
+.btn.danger:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
+.btn svg { width: 18px; height: 18px; display: block; }
+.btn .label { font-size: 13px; }
+
+/* ── Body: rail + viewport ───────────────────────────────────────────────────── */
+#body { flex: 1; display: flex; min-height: 0; }
+
+#rail {
+  width: var(--rail-w); flex: 0 0 auto;
+  background: var(--bg-sunken); border-right: 1px solid var(--panel-border);
+  overflow-y: auto; padding: var(--sp-2);
+  display: flex; flex-direction: column; gap: var(--sp-2);
+}
+#rail.hidden { display: none; }
+.thumb {
+  position: relative; border: 2px solid transparent; border-radius: var(--r-sm);
+  background: var(--bg-raised); cursor: pointer; overflow: hidden;
+}
+.thumb canvas { display: block; width: 100%; height: auto; background: #fff; }
+.thumb .pno {
+  position: absolute; bottom: 3px; right: 4px; font-size: 10px; color: var(--fg);
+  background: var(--overlay); padding: 1px 5px; border-radius: 8px;
+}
+.thumb.selected { border-color: var(--accent); }
+.thumb.current { box-shadow: inset 0 0 0 2px var(--accent-soft); }
+
+#viewport {
+  flex: 1; min-width: 0; overflow: auto; background: var(--canvas-bg);
+  padding: var(--sp-5) var(--sp-4); display: flex; flex-direction: column;
+  align-items: center; gap: var(--sp-5);
+}
+.page-wrap { position: relative; box-shadow: var(--page-shadow); background: #fff; }
+.page-wrap canvas { display: block; }
+.page-wrap .badge {
+  position: absolute; top: 6px; left: 6px; font-size: 11px; color: var(--fg);
+  background: var(--overlay); padding: 2px 7px; border-radius: 8px; pointer-events: none;
+}
+
+/* ── Empty / welcome ─────────────────────────────────────────────────────────── */
+#welcome {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; gap: var(--sp-4); padding: var(--sp-6);
+}
+#welcome.hidden { display: none; }
+#welcome .drop {
+  border: 2px dashed var(--panel-border); border-radius: var(--r-lg);
+  padding: var(--sp-6) calc(var(--sp-6) * 1.4); transition: border-color .15s, background .15s;
+}
+#welcome .drop.over { border-color: var(--accent); background: var(--accent-soft); }
+#welcome h1 { font-size: 24px; margin: 0; }
+#welcome p { color: var(--fg-muted); max-width: 440px; margin: 0 auto; }
+#welcome .actions { display: flex; gap: var(--sp-2); justify-content: center; flex-wrap: wrap; }
+#welcome .privacy { font-size: 12px; color: var(--fg-faint); display: flex; align-items: center; gap: 6px; }
+#welcome .privacy svg { width: 14px; height: 14px; flex: 0 0 auto; }
+#welcome .drop > div:first-child svg { width: 46px; height: 46px; }
+
+/* ── Status bar ──────────────────────────────────────────────────────────────── */
+#statusbar {
+  height: 28px; flex: 0 0 auto; display: flex; align-items: center; gap: var(--sp-3);
+  padding: 0 var(--sp-3); background: var(--bg-raised); border-top: 1px solid var(--panel-border);
+  font-size: 12px; color: var(--fg-muted);
+}
+#statusbar .spacer { flex: 1; }
+#statusbar .zoom { display: flex; align-items: center; gap: 4px; }
+#statusbar button { background: none; border: none; color: var(--fg-muted); cursor: pointer; padding: 2px 5px; border-radius: 4px; }
+#statusbar button:hover { background: var(--bg-sunken); color: var(--fg); }
+
+/* ── Toasts ──────────────────────────────────────────────────────────────────── */
+#toasts {
+  position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+  display: flex; flex-direction: column; gap: var(--sp-2); z-index: 60; align-items: center;
+}
+.toast {
+  padding: 10px 16px; border-radius: var(--r-md); background: var(--panel);
+  border: 1px solid var(--panel-border); box-shadow: var(--shadow-pop);
+  max-width: 70vw; animation: toast-in .18s ease-out;
+}
+.toast.err { border-color: var(--danger); }
+.toast.warn { border-color: var(--warn); }
+.toast.ok { border-color: var(--ok); }
+.toast .detail { display: block; font-size: 12px; color: var(--fg-muted); margin-top: 3px; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* ── Modal ───────────────────────────────────────────────────────────────────── */
+#modal-root { position: fixed; inset: 0; z-index: 80; display: none; }
+#modal-root.open { display: block; }
+#modal-root .scrim { position: absolute; inset: 0; background: var(--overlay); }
+#modal-root .modal {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  background: var(--panel); border: 1px solid var(--panel-border); border-radius: var(--r-lg);
+  box-shadow: var(--shadow-pop); min-width: 360px; max-width: 560px; max-height: 80vh; overflow: auto;
+}
+#modal-root .modal h2 { margin: 0; padding: var(--sp-4); border-bottom: 1px solid var(--panel-border); font-size: 16px; }
+#modal-root .modal .body { padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-3); }
+#modal-root .modal .body label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--fg-muted); }
+#modal-root .modal .body input, #modal-root .modal .body select {
+  background: var(--bg-sunken); border: 1px solid var(--panel-border); color: var(--fg);
+  border-radius: var(--r-sm); padding: 8px 10px; font-size: 14px;
+}
+#modal-root .modal .row { display: flex; gap: var(--sp-2); }
+#modal-root .modal .foot { display: flex; justify-content: flex-end; gap: var(--sp-2); padding: var(--sp-4); border-top: 1px solid var(--panel-border); }
+.setting-row { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.setting-row .desc { font-size: 12px; color: var(--fg-faint); }
+
+/* ── Compat warning ──────────────────────────────────────────────────────────── */
+#compat { display: none; padding: var(--sp-6); text-align: center; }
+#compat.show { display: block; }
+
+#loading-bar {
+  position: fixed; top: 0; left: 0; height: 2px; background: var(--accent);
+  width: 0; transition: width .2s; z-index: 90;
+}
+
+</style>
+</head>
+<body>
+  <div id="loading-bar"></div>
+  <div id="app" data-version="0.1.0">
+
+    <div id="compat">
+      <h1>Sheaf needs a modern browser</h1>
+      <p>Sheaf uses the File System Access API, IndexedDB, and WebCrypto. Please use a recent Chromium browser (Chrome / Edge / Brave / Arc) for the full experience, or a current Firefox / Safari for open-and-download mode.</p>
+    </div>
+
+    <div id="toolbar" role="toolbar" aria-label="Main toolbar"></div>
+
+    <div id="welcome" role="main" aria-label="Open a PDF to get started"></div>
+
+    <div id="body" class="hidden">
+      <div id="rail" role="listbox" aria-label="Page thumbnails"></div>
+      <div id="viewport" role="application" aria-label="PDF pages" tabindex="0"></div>
+    </div>
+
+    <div id="statusbar" role="status" aria-live="polite"></div>
+  </div>
+
+  <div id="toasts" aria-live="polite" aria-atomic="false"></div>
+  <div id="modal-root" aria-live="polite"></div>
+
+  
+<script type="module">
+/* core/engines.js */
+const __m_core_engines = (() => {
+// engines.js — vendored-engine loader. Probe → lazy-load on first use → verify
+// SHA-256 → cache. Fail loud on mismatch. No runtime CDN; everything is served
+// same-origin from /engines. Never surprise-download multi-MB assets — callers
+// gate the first load behind an explicit action.
+//
+// Engines are dependency-injected so the deterministic core stays testable:
+// the browser bootstrap calls loadEngine(); a Node test calls registerEngine()
+// with a directly-imported module. Either way ops read engines via getEngine().
+
+// The pin manifest. Paths are relative to ENGINES_BASE; sha256 is verified before
+// the module is allowed to execute. Bump version + sha together, never one alone.
+const MANIFEST = {
+  'pdf-lib': {
+    version: '1.17.1',
+    path: 'pdf-lib/1.17.1/pdf-lib.esm.js',
+    sha256: '4bd8dd3155d7b1062a161567bf68168c55283bd5fad6a638b16ae028846b52c5',
+    sizeHint: '1.5 MB',
+  },
+  'pdfjs': {
+    version: '4.10.38',
+    path: 'pdfjs/4.10.38/pdf.min.mjs',
+    sha256: '27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c',
+    sizeHint: '350 KB',
+    worker: {
+      path: 'pdfjs/4.10.38/pdf.worker.min.mjs',
+      sha256: '1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36',
+    },
+  },
+};
+
+let BASE = '/engines';
+function setEnginesBase(p) { BASE = p.replace(/\/$/, ''); }
+function enginesBase() { return BASE; }
+
+const _loaded = new Map();   // name -> module
+const _loading = new Map();  // name -> Promise
+
+function registerEngine(name, mod) { _loaded.set(name, mod); }
+function getEngine(name) {
+  const m = _loaded.get(name);
+  if (!m) throw new Error(`Engine "${name}" not loaded — call loadEngine() first`);
+  return m;
+}
+function isLoaded(name) { return _loaded.has(name); }
+
+async function sha256Hex(buf) {
+  const digest = await crypto.subtle.digest('SHA-256', buf);
+  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Fetch the vendored file, verify its hash, then import it. The verify-then-import
+// uses a same-origin re-fetch (served from cache); the hash is a tamper tripwire on
+// the vendored bundle, not an anti-MITM measure (same-origin already gives us that).
+async function loadEngine(name) {
+  if (_loaded.has(name)) return _loaded.get(name);
+  if (_loading.has(name)) return _loading.get(name);
+
+  const entry = MANIFEST[name];
+  if (!entry) throw new Error(`Unknown engine "${name}"`);
+
+  const p = (async () => {
+    const url = `${BASE}/${entry.path}`;
+    let bytes;
+    try {
+      const res = await fetch(url, { cache: 'force-cache' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      bytes = await res.arrayBuffer();
+    } catch (err) {
+      throw new Error(`Engine "${name}" failed to load from ${url}: ${err.message}`);
+    }
+    const got = await sha256Hex(bytes);
+    if (got !== entry.sha256) {
+      throw new Error(`Engine "${name}" integrity check FAILED — expected ${entry.sha256}, got ${got}. Refusing to load a tampered bundle.`);
+    }
+    const mod = await import(/* @vite-ignore */ url);
+    _loaded.set(name, mod);
+    return mod;
+  })();
+
+  _loading.set(name, p);
+  try { return await p; }
+  finally { _loading.delete(name); }
+}
+
+// PDF.js needs its worker pinned too. Returns the same-origin worker URL after the
+// engine is loaded; the caller assigns GlobalWorkerOptions.workerSrc.
+function pdfjsWorkerUrl() {
+  return `${BASE}/${MANIFEST.pdfjs.worker.path}`;
+}
+
+return { MANIFEST, setEnginesBase, enginesBase, registerEngine, getEngine, isLoaded, loadEngine, pdfjsWorkerUrl };
+})();
+
+/* core/history.js */
+const __m_core_history = (() => {
+// history.js — the op-log + periodic snapshots that make replay possible.
+//
+// Sheaf's M0 gate: "event-log replay reconstructs state." State is the document.
+// We log every committed op; we snapshot the serialized PDF bytes every N ops.
+// To reach pointer P we load the nearest snapshot at/below P and re-run the ops
+// after it. Undo/redo and crash-restore are the SAME walk — one mechanism.
+//
+// Same shape as Slate's history (suite convention); the snapshot payload is PDF
+// bytes (Uint8Array) instead of an ImageData.
+
+const MAX_STEPS = 80;
+const SNAPSHOT_INTERVAL = 8;
+
+class History {
+  constructor() {
+    this._ops = [];      // [{ op, params }]
+    this._snaps = [];    // [{ pointer, bytes }]   pointer -1 snap = the originally-opened bytes
+    this._pointer = -1;  // -1 = original document, pre-any-op
+  }
+
+  // Record an op at the tip, truncating any redo branch. Returns the new pointer.
+  push(op, params) {
+    this._ops = this._ops.slice(0, this._pointer + 1);
+    this._snaps = this._snaps.filter(s => s.pointer <= this._pointer);
+    this._ops.push({ op, params });
+
+    if (this._ops.length > MAX_STEPS) {
+      const removed = this._ops.length - MAX_STEPS;
+      this._ops = this._ops.slice(removed);
+      this._snaps = this._snaps
+        .filter(s => s.pointer >= removed)
+        .map(s => ({ ...s, pointer: s.pointer - removed }));
+      this._pointer = Math.max(-1, this._pointer - removed);
+    }
+    this._pointer = this._ops.length - 1;
+    return this._pointer;
+  }
+
+  // Snapshot the document bytes at a pointer. The -1 (original) snapshot is always
+  // kept regardless of interval — it's the replay floor. Others land on the interval.
+  saveSnapshot(pointer, bytes) {
+    if (pointer !== -1 && pointer % SNAPSHOT_INTERVAL !== 0) return;
+    this._snaps = this._snaps.filter(s => s.pointer !== pointer);
+    this._snaps.push({ pointer, bytes });
+  }
+
+  // The plan to reach targetPointer: the nearest snapshot at/below it + the ops
+  // that must be re-run after that snapshot.
+  getReplayPlan(targetPointer) {
+    const snap = this._snaps
+      .filter(s => s.pointer <= targetPointer)
+      .sort((a, b) => b.pointer - a.pointer)[0] ?? null;
+    const startPointer = snap ? snap.pointer : -1;
+    const ops = this._ops.slice(startPointer + 1, targetPointer + 1);
+    return { snap, ops };
+  }
+
+  // The full op log up to and including the current pointer (for export as a
+  // re-runnable pipeline — the sovereign-artifact thesis, Bench §5).
+  opsUpToPointer(pointer = this._pointer) {
+    return this._ops.slice(0, pointer + 1).map(({ op, params }) => ({ op, params }));
+  }
+
+  canUndo() { return this._pointer >= 0; }
+  canRedo() { return this._pointer < this._ops.length - 1; }
+  stepBack() { if (!this.canUndo()) return false; this._pointer--; return true; }
+  stepForward() { if (!this.canRedo()) return false; this._pointer++; return true; }
+
+  get pointer() { return this._pointer; }
+  get size() { return this._ops.length; }
+  peek(pointer = this._pointer) { return this._ops[pointer] ?? null; }
+
+  clear() { this._ops = []; this._snaps = []; this._pointer = -1; }
+}
+
+return { History };
+})();
+
+/* core/events.js */
+const __m_core_events = (() => {
+// events.js — the suite event bus (nakli-creative-primitives convention).
+// A tiny synchronous pub/sub. One bus per tab; modules talk through topics, never
+// by reaching into each other. Lifted from the shared primitive so tools 2–5 see
+// the same shape.
+
+const _bus = new Map();
+
+function on(type, fn) {
+  if (!_bus.has(type)) _bus.set(type, new Set());
+  _bus.get(type).add(fn);
+  return () => off(type, fn);
+}
+
+function off(type, fn) {
+  _bus.get(type)?.delete(fn);
+}
+
+function once(type, fn) {
+  const wrapper = (data) => { off(type, wrapper); fn(data); };
+  on(type, wrapper);
+}
+
+function emit(type, data) {
+  // Copy the listener set so a handler that subscribes/unsubscribes mid-emit
+  // doesn't corrupt the iteration.
+  const set = _bus.get(type);
+  if (!set) return;
+  for (const fn of [...set]) {
+    try { fn(data); }
+    catch (err) { console.error(`[events] handler for "${type}" threw:`, err); }
+  }
+}
+
+return { on, off, once, emit };
+})();
+
+/* core/state.js */
+const __m_core_state = (() => {
+// state.js — the single document-state shape + UI preferences.
+//
+// One mutable `state` object the whole app reads. The open document is a SheafDoc
+// (or null). History is the op-log. Preferences persist to localStorage — and ONLY
+// preferences: never PDF content, page bytes, extracted text, or form values. Those
+// live in memory and, at most, in OPFS crash-staging (storage.js) — never here.
+
+const History = __m_core_history.History;
+const emit = __m_core_events.emit;
+const on = __m_core_events.on;
+
+const state = {
+  session: {
+    source: null,        // 'fsa' | 'picker' | 'dragdrop' | 'url' | 'restore' | null
+    fileHandle: null,    // FileSystemFileHandle when opened via FSA (for save-in-place)
+    folderHandle: null,  // FileSystemDirectoryHandle for folder mode / sidecar saves
+    fileName: null,      // pinned on first save; never re-derived from a mutable title
+    files: [],           // folder mode: [{ handle, name, size }]
+    currentIndex: 0,
+  },
+  doc: null,             // SheafDoc | null — the open document object
+  view: {
+    pageIndex: 0,        // active page (paginated mode) / scroll anchor (continuous)
+    zoom: 1.0,
+    fitMode: 'width',    // 'width' | 'page' | 'actual' | 'custom'
+    mode: 'continuous',  // 'continuous' | 'paginated'
+  },
+  selection: {
+    pages: [],           // selected page indices (thumbnail multi-select)
+    region: null,        // { page, x, y, w, h } in PDF units — for redact/annotate
+  },
+  activeTool: null,
+  history: new History(),
+  dirty: false,          // unsaved changes since last save/open
+  dev: {
+    agentFace: false,    // window.sheaf is OFF by default — opt-in developer setting
+  },
+};
+
+// ── Preferences (localStorage; UI only) ────────────────────────────────────────
+
+const PREFS_KEY = 'sheaf.v1.prefs';
+
+function loadPrefs() {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (!raw) return;
+    const p = JSON.parse(raw);
+    if (p.theme) document.documentElement.setAttribute('data-theme', p.theme);
+    if (p.viewMode === 'continuous' || p.viewMode === 'paginated') state.view.mode = p.viewMode;
+    if (typeof p.fitMode === 'string') state.view.fitMode = p.fitMode;
+    if (typeof p.agentFace === 'boolean') state.dev.agentFace = p.agentFace;
+  } catch {}
+}
+
+function savePrefs() {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({
+      theme: document.documentElement.getAttribute('data-theme') || 'dark',
+      viewMode: state.view.mode,
+      fitMode: state.view.fitMode,
+      agentFace: state.dev.agentFace,
+    }));
+  } catch {}
+}
+
+// ── Document lifecycle ─────────────────────────────────────────────────────────
+
+// Install a freshly-opened document. Resets view/selection/history — a new file is
+// a clean slate.
+function setDoc(doc, { fileName = null, fileHandle = null, folderHandle = null, source = null } = {}) {
+  state.doc = doc;
+  state.session.fileName = fileName;
+  state.session.fileHandle = fileHandle;
+  if (folderHandle !== undefined) state.session.folderHandle = folderHandle ?? state.session.folderHandle;
+  state.session.source = source;
+  state.view.pageIndex = 0;
+  state.selection = { pages: [], region: null };
+  state.activeTool = null;
+  state.history.clear();
+  state.dirty = false;
+  emit('doc:loaded', { fileName, pageCount: doc ? doc.pageCount() : 0 });
+}
+
+function closeDoc() {
+  state.doc = null;
+  state.session = { source: null, fileHandle: null, folderHandle: null, fileName: null, files: [], currentIndex: 0 };
+  state.history.clear();
+  state.dirty = false;
+  emit('doc:closed', null);
+}
+
+function markDirty(v = true) {
+  if (state.dirty === v) return;
+  state.dirty = v;
+  emit('dirty:changed', { dirty: v });
+}
+
+on('prefs:save', () => savePrefs());
+
+return { state, loadPrefs, savePrefs, setDoc, closeDoc, markDirty };
+})();
+
+/* core/registry.js */
+const __m_core_registry = (() => {
+// registry.js — THE operation registry. The spine of the whole tool.
+//
+// Every operation — page op, annotation, redaction, OCR, metadata edit — registers
+// here once. Three doors dispatch through it (runner.dispatch): the human UI (click),
+// the agent face (window.sheaf / URL mode — call), and the Bench conductor (brief).
+// One mechanism, three entry points. This is what makes the agent face real and not
+// a parallel codepath.
+//
+// An op definition:
+//   {
+//     id:            'pages.rotate'          // 'group.verb', stable, the agent vocabulary
+//     label:         'Rotate pages'          // human label
+//     group:         'page'                  // operation group (UI grouping + taxonomy)
+//     icon:          'rotate'                // icon id (ui/icons)
+//     description:   '…'                     // one line; the catalog the conductor reads
+//     params:        { …schema }             // validated at the single ingress
+//     mutates:       true                    // true → run returns { doc }; false → { artifact }
+//     agentCallable: true                    // exposed on window.sheaf / URL mode?
+//     run(doc, params) → { doc } | { artifact }
+//   }
+
+const _ops = new Map();
+
+const GROUPS = [
+  'open', 'page', 'annotate', 'text', 'forms', 'sign',
+  'redact', 'ocr', 'compress', 'metadata', 'marks', 'convert', 'compare',
+];
+
+function register(def) {
+  if (!def || typeof def !== 'object') throw new Error('register() needs an op definition');
+  const { id, run } = def;
+  if (!id || typeof id !== 'string') throw new Error('op needs a string id');
+  if (_ops.has(id)) throw new Error(`Duplicate op id: ${id}`);
+  if (typeof run !== 'function') throw new Error(`op ${id} needs a run() function`);
+  if (def.group && !GROUPS.includes(def.group)) throw new Error(`op ${id} has unknown group "${def.group}"`);
+  _ops.set(id, {
+    id,
+    label: def.label || id,
+    group: def.group || 'open',
+    icon: def.icon || null,
+    description: def.description || '',
+    params: def.params || {},
+    mutates: def.mutates !== false,        // default: a document-mutating op
+    agentCallable: def.agentCallable === true,
+    run,
+  });
+  return id;
+}
+
+function registerAll(defs) { defs.forEach(register); }
+
+function get(id) { return _ops.get(id) || null; }
+function has(id) { return _ops.has(id); }
+function list({ group = null, agentCallableOnly = false } = {}) {
+  let xs = [..._ops.values()];
+  if (group) xs = xs.filter(o => o.group === group);
+  if (agentCallableOnly) xs = xs.filter(o => o.agentCallable);
+  return xs;
+}
+function groups() { return GROUPS.slice(); }
+
+// The machine-readable vocabulary handed to the agent face and the Bench conductor:
+// op ids, their groups, descriptions, and param schemas — never document content.
+function catalog({ agentCallableOnly = true } = {}) {
+  return list({ agentCallableOnly }).map(o => ({
+    id: o.id, label: o.label, group: o.group, description: o.description,
+    mutates: o.mutates, params: o.params,
+  }));
+}
+
+// Test/hot-reload only.
+function _reset() { _ops.clear(); }
+
+return { register, registerAll, get, has, list, groups, catalog, _reset };
+})();
+
+/* core/schema.js */
+const __m_core_schema = (() => {
+// schema.js — the ONE ingress. Every byte and every param from outside the app
+// passes through here before the core touches it. One door, and it checks coats.
+//
+// Two jobs:
+//   1. validateParams(schema, input)  — coerce + validate operation params
+//   2. validatePdfBytes(bytes)        — sanity-gate an incoming PDF before parsing
+//
+// The param schema is a deliberately small descriptor — not JSON Schema — so it
+// stays inspectable by the agent face and the Bench conductor (they read these to
+// know what each op accepts). Keep it boring.
+
+// A field descriptor: { type, required?, default?, min?, max?, enum?, items?, of? }
+//   type: 'int' | 'number' | 'string' | 'bool' | 'array' | 'object' | 'bytes' | 'any'
+//   items: for 'array', a field descriptor each element must satisfy
+//   of:    for 'object', a { key: descriptor } map
+
+class ValidationError extends Error {
+  constructor(message, errors) {
+    super(message);
+    this.name = 'ValidationError';
+    this.errors = errors || [];
+  }
+}
+
+function fail(errors, path, msg) {
+  errors.push(`${path || '(root)'}: ${msg}`);
+}
+
+function coerceField(desc, value, path, errors) {
+  // Apply default for undefined/null
+  if (value === undefined || value === null) {
+    if (desc.default !== undefined) return typeof desc.default === 'function' ? desc.default() : desc.default;
+    if (desc.required) { fail(errors, path, 'required'); return undefined; }
+    return undefined;
+  }
+
+  switch (desc.type) {
+    case 'int': {
+      const n = typeof value === 'string' ? Number(value) : value;
+      if (typeof n !== 'number' || !Number.isFinite(n) || Math.trunc(n) !== n) { fail(errors, path, `expected integer, got ${JSON.stringify(value)}`); return undefined; }
+      if (desc.min !== undefined && n < desc.min) { fail(errors, path, `must be >= ${desc.min}`); return undefined; }
+      if (desc.max !== undefined && n > desc.max) { fail(errors, path, `must be <= ${desc.max}`); return undefined; }
+      return n;
+    }
+    case 'number': {
+      const n = typeof value === 'string' ? Number(value) : value;
+      if (typeof n !== 'number' || !Number.isFinite(n)) { fail(errors, path, `expected number, got ${JSON.stringify(value)}`); return undefined; }
+      if (desc.min !== undefined && n < desc.min) { fail(errors, path, `must be >= ${desc.min}`); return undefined; }
+      if (desc.max !== undefined && n > desc.max) { fail(errors, path, `must be <= ${desc.max}`); return undefined; }
+      return n;
+    }
+    case 'string': {
+      if (typeof value !== 'string') { fail(errors, path, `expected string`); return undefined; }
+      if (desc.enum && !desc.enum.includes(value)) { fail(errors, path, `must be one of ${desc.enum.join(', ')}`); return undefined; }
+      if (desc.maxLength !== undefined && value.length > desc.maxLength) { fail(errors, path, `too long (max ${desc.maxLength})`); return undefined; }
+      return value;
+    }
+    case 'bool': {
+      if (typeof value === 'boolean') return value;
+      if (value === 'true') return true;
+      if (value === 'false') return false;
+      fail(errors, path, 'expected boolean'); return undefined;
+    }
+    case 'array': {
+      if (!Array.isArray(value)) { fail(errors, path, 'expected array'); return undefined; }
+      if (desc.minItems !== undefined && value.length < desc.minItems) { fail(errors, path, `needs >= ${desc.minItems} items`); return undefined; }
+      if (!desc.items) return value;
+      return value.map((v, i) => coerceField(desc.items, v, `${path}[${i}]`, errors));
+    }
+    case 'object': {
+      if (typeof value !== 'object' || Array.isArray(value)) { fail(errors, path, 'expected object'); return undefined; }
+      if (!desc.of) return value;
+      const out = {};
+      for (const [k, d] of Object.entries(desc.of)) out[k] = coerceField(d, value[k], path ? `${path}.${k}` : k, errors);
+      return out;
+    }
+    case 'bytes': {
+      if (!(value instanceof Uint8Array) && !(value instanceof ArrayBuffer)) { fail(errors, path, 'expected bytes'); return undefined; }
+      return value instanceof ArrayBuffer ? new Uint8Array(value) : value;
+    }
+    case 'any':
+    default:
+      return value;
+  }
+}
+
+// Validate + coerce a params object against a { key: descriptor } schema.
+// Throws ValidationError on any failure; returns the coerced object on success.
+function validateParams(schema, input) {
+  const errors = [];
+  const out = {};
+  const src = input || {};
+  for (const [key, desc] of Object.entries(schema || {})) {
+    out[key] = coerceField(desc, src[key], key, errors);
+  }
+  if (errors.length) throw new ValidationError(`Invalid parameters: ${errors.join('; ')}`, errors);
+  return out;
+}
+
+// Gate incoming PDF bytes before any engine parses them. Cheap structural checks
+// only — the real parse happens in the doc adapter, but this catches obvious
+// non-PDF / truncated input at the single ingress and fails loud.
+const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46, 0x2d]; // "%PDF-"
+
+function validatePdfBytes(input, { maxBytes = 0 } = {}) {
+  const bytes = input instanceof ArrayBuffer ? new Uint8Array(input) : input;
+  if (!(bytes instanceof Uint8Array)) throw new ValidationError('Not a byte buffer');
+  if (bytes.length < 32) throw new ValidationError('Too small to be a PDF');
+  if (maxBytes && bytes.length > maxBytes) throw new ValidationError(`Exceeds size limit (${bytes.length} > ${maxBytes})`);
+  // Header may sit within the first 1KB (some PDFs have a leading BOM / junk).
+  let headerAt = -1;
+  const limit = Math.min(bytes.length - PDF_MAGIC.length, 1024);
+  for (let i = 0; i <= limit; i++) {
+    let ok = true;
+    for (let j = 0; j < PDF_MAGIC.length; j++) { if (bytes[i + j] !== PDF_MAGIC[j]) { ok = false; break; } }
+    if (ok) { headerAt = i; break; }
+  }
+  if (headerAt === -1) throw new ValidationError('Missing %PDF- header — not a PDF');
+  return bytes;
+}
+
+return { ValidationError, validateParams, validatePdfBytes };
+})();
+
+/* core/doc.js */
+const __m_core_doc = (() => {
+// doc.js — the nakli-doc PDF adapter (write/structure side).
+//
+// nakli-doc is the suite's document-model abstraction. Here it is implemented over
+// pdf-lib: a PDF is a *document object* — pages, sizes, rotations, the metadata
+// dict — not a pixel surface (that's Slate). The canonical state is the byte buffer;
+// a live pdf-lib PDFDocument is the working representation ops mutate.
+//
+// Rendering and the text layer (PDF.js) are a separate, browser-only adapter
+// (render.js) that derives pixels from this model. Keeping the structure side free
+// of PDF.js is what lets the M0 replay gate run headlessly.
+
+const getEngine = __m_core_engines.getEngine;
+const validatePdfBytes = __m_core_schema.validatePdfBytes;
+
+class SheafDoc {
+  constructor(pdf, sourceBytes) {
+    this._pdf = pdf;             // pdf-lib PDFDocument (the write model)
+    this._sourceBytes = sourceBytes; // bytes this doc was parsed from (immutable origin)
+  }
+
+  // pdf-lib module, for ops that need PDFDocument / rgb / degrees etc.
+  static get lib() { return getEngine('pdf-lib'); }
+
+  static async fromBytes(bytes, { validate = true } = {}) {
+    const { PDFDocument } = getEngine('pdf-lib');
+    const clean = validate
+      ? validatePdfBytes(bytes)
+      : (bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes);
+    // updateMetadata:false — never silently stamp the user's file with our producer.
+    const pdf = await PDFDocument.load(clean, { updateMetadata: false, ignoreEncryption: true });
+    return new SheafDoc(pdf, clean);
+  }
+
+  static async blank(pageCount = 1, size = [612, 792]) {
+    const { PDFDocument } = getEngine('pdf-lib');
+    const pdf = await PDFDocument.create();
+    for (let i = 0; i < pageCount; i++) pdf.addPage(size);
+    return new SheafDoc(pdf, null);
+  }
+
+  get pdf() { return this._pdf; }
+  setPdf(pdf) { this._pdf = pdf; }        // for ops that build a fresh doc (merge/extract)
+
+  pageCount() { return this._pdf.getPageCount(); }
+
+  pages() {
+    return this._pdf.getPages().map((p, i) => {
+      const { width, height } = p.getSize();
+      return { index: i, width: round(width), height: round(height), rotation: norm360(p.getRotation().angle) };
+    });
+  }
+
+  getMetadata() {
+    const g = (fn) => { try { return this._pdf[fn]() ?? null; } catch { return null; } };
+    const d = (fn) => { const v = g(fn); return v instanceof Date ? v.toISOString() : v; };
+    return {
+      title: g('getTitle'), author: g('getAuthor'), subject: g('getSubject'),
+      keywords: g('getKeywords'), creator: g('getCreator'), producer: g('getProducer'),
+      creationDate: d('getCreationDate'), modificationDate: d('getModificationDate'),
+    };
+  }
+
+  // Serialize to bytes. updateMetadata:false is REQUIRED, not optional: pdf-lib
+  // otherwise stamps ModificationDate (and its own Producer) on every save — which
+  // (a) silently rewrites the user's file metadata, forbidden by the sovereignty
+  // rules, and (b) makes the same document serialize differently second-to-second,
+  // breaking replay determinism. useObjectStreams keeps the output compact.
+  async toBytes() { return await this._pdf.save({ useObjectStreams: true, updateMetadata: false }); }
+
+  // A semantic fingerprint of document state: page geometry + metadata. This is the
+  // equality the M0 replay gate checks ("state reconstructed"), robust to byte-level
+  // re-serialization differences. Text-layer fingerprinting is browser-side (render.js).
+  fingerprint() {
+    return {
+      pageCount: this.pageCount(),
+      pages: this.pages().map(p => ({ w: p.width, h: p.height, r: p.rotation })),
+      meta: this.getMetadata(),
+    };
+  }
+
+  async fingerprintHash() {
+    const json = JSON.stringify(this.fingerprint());
+    const buf = new TextEncoder().encode(json);
+    const digest = await crypto.subtle.digest('SHA-256', buf);
+    return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+}
+
+function round(n) { return Math.round(n * 100) / 100; }
+function norm360(a) { return ((a % 360) + 360) % 360; }
+
+return { SheafDoc };
+})();
+
+/* ops/open.js */
+const __m_ops_open = (() => {
+// ops/open.js — the canonical document-open ops. The file picker, drag-drop, URL
+// mode, and the agent face all funnel through these, so opening goes through the
+// same registry + single ingress as everything else. Open ops seed the replay floor
+// (runner) rather than appending to the op-log — you don't "replay opening".
+
+const SheafDoc = __m_core_doc.SheafDoc;
+
+const ops = [
+  {
+    id: 'open.bytes', label: 'Open PDF', group: 'open', icon: 'open',
+    description: 'Open a PDF from raw bytes. The single ingress validates the %PDF header before parsing.',
+    agentCallable: true,
+    params: { bytes: { type: 'bytes', required: true } },
+    async run(_doc, { bytes }) {
+      return { doc: await SheafDoc.fromBytes(bytes, { validate: true }) };
+    },
+  },
+  {
+    id: 'open.blank', label: 'New blank PDF', group: 'open', icon: 'new',
+    description: 'Create a new blank document with the given number of US-Letter pages.',
+    agentCallable: true,
+    params: { pages: { type: 'int', default: 1, min: 1, max: 1000 } },
+    async run(_doc, { pages }) {
+      return { doc: await SheafDoc.blank(pages) };
+    },
+  },
+];
+
+return { ops };
+})();
+
+/* ops/pages.js */
+const __m_ops_pages = (() => {
+// ops/pages.js — page operations (pdf-lib). The Stirling "page ops" group,
+// reimplemented browser-native. Property changes (rotate/scale) mutate pages in
+// place; set/order changes (reorder/duplicate/extract/merge) build a fresh document
+// via copyPages — the well-trodden pdf-lib path.
+//
+// Every op is deterministic: same input doc + same params → same output. That is
+// what makes the op-log replayable (M0) and the agent face safe.
+
+const getEngine = __m_core_engines.getEngine;
+const SheafDoc = __m_core_doc.SheafDoc;
+
+function lib() { return getEngine('pdf-lib'); }
+function norm360(a) { return ((a % 360) + 360) % 360; }
+
+function assertPages(indices, count) {
+  for (const i of indices) {
+    if (!Number.isInteger(i) || i < 0 || i >= count) {
+      throw new Error(`Page index ${i} out of range (document has ${count} page${count === 1 ? '' : 's'})`);
+    }
+  }
+}
+
+// Build a new SheafDoc by copying pages from src in the given index order.
+// copyPages copies page content only — it does NOT carry the document's Info dict.
+// We must copy metadata across, or reordering/extracting would silently wipe the
+// user's title/author/dates AND stamp a fresh modification date (PDFDocument.create()
+// sets it to "now"), which would also break replay determinism.
+async function rebuildFromOrder(src, order) {
+  const { PDFDocument } = lib();
+  const out = await PDFDocument.create();
+  carryMetadata(src.pdf, out);
+  const copied = await out.copyPages(src.pdf, order);
+  copied.forEach(p => out.addPage(p));
+  return new SheafDoc(out, null);
+}
+
+function carryMetadata(src, out) {
+  const move = (get, set, transform) => {
+    try { const v = src[get](); if (v != null) out[set](transform ? transform(v) : v); } catch {}
+  };
+  move('getTitle', 'setTitle');
+  move('getAuthor', 'setAuthor');
+  move('getSubject', 'setSubject');
+  move('getCreator', 'setCreator');
+  move('getProducer', 'setProducer');
+  move('getKeywords', 'setKeywords', (v) => Array.isArray(v) ? v : String(v).split(',').map(s => s.trim()).filter(Boolean));
+  move('getCreationDate', 'setCreationDate');
+  move('getModificationDate', 'setModificationDate');
+}
+
+const ops = [
+  {
+    id: 'pages.rotate', label: 'Rotate pages', group: 'page', icon: 'rotate',
+    description: 'Rotate the given pages by a multiple of 90° (relative to their current rotation).',
+    agentCallable: true,
+    params: {
+      pages: { type: 'array', required: true, items: { type: 'int', min: 0 }, minItems: 1 },
+      angle: { type: 'int', required: true, enum: undefined },
+    },
+    run(doc, { pages, angle }) {
+      if (angle % 90 !== 0) throw new Error('Rotation angle must be a multiple of 90');
+      assertPages(pages, doc.pageCount());
+      const { degrees } = lib();
+      const ps = doc.pdf.getPages();
+      for (const i of pages) {
+        const cur = ps[i].getRotation().angle;
+        ps[i].setRotation(degrees(norm360(cur + angle)));
+      }
+      return { doc };
+    },
+  },
+
+  {
+    id: 'pages.delete', label: 'Delete pages', group: 'page', icon: 'trash',
+    description: 'Remove the given pages from the document.',
+    agentCallable: true,
+    params: { pages: { type: 'array', required: true, items: { type: 'int', min: 0 }, minItems: 1 } },
+    run(doc, { pages }) {
+      const count = doc.pageCount();
+      assertPages(pages, count);
+      const unique = [...new Set(pages)];
+      if (unique.length >= count) throw new Error('Cannot delete every page — a document needs at least one page');
+      // Remove high index first so earlier indices stay valid.
+      for (const i of unique.sort((a, b) => b - a)) doc.pdf.removePage(i);
+      return { doc };
+    },
+  },
+
+  {
+    id: 'pages.reorder', label: 'Reorder pages', group: 'page', icon: 'reorder',
+    description: 'Reorder pages to the given permutation of page indices.',
+    agentCallable: true,
+    params: { order: { type: 'array', required: true, items: { type: 'int', min: 0 }, minItems: 1 } },
+    async run(doc, { order }) {
+      const count = doc.pageCount();
+      assertPages(order, count);
+      if (order.length !== count || new Set(order).size !== count) {
+        throw new Error(`order must be a permutation of all ${count} page indices`);
+      }
+      return { doc: await rebuildFromOrder(doc, order) };
+    },
+  },
+
+  {
+    id: 'pages.duplicate', label: 'Duplicate pages', group: 'page', icon: 'copy',
+    description: 'Insert a copy of each given page directly after the original.',
+    agentCallable: true,
+    params: { pages: { type: 'array', required: true, items: { type: 'int', min: 0 }, minItems: 1 } },
+    async run(doc, { pages }) {
+      const count = doc.pageCount();
+      assertPages(pages, count);
+      const dup = new Set(pages);
+      const order = [];
+      for (let i = 0; i < count; i++) { order.push(i); if (dup.has(i)) order.push(i); }
+      return { doc: await rebuildFromOrder(doc, order) };
+    },
+  },
+
+  {
+    id: 'pages.extract', label: 'Keep only pages', group: 'page', icon: 'extract',
+    description: 'Reduce the document to only the given pages, in the given order.',
+    agentCallable: true,
+    params: { pages: { type: 'array', required: true, items: { type: 'int', min: 0 }, minItems: 1 } },
+    async run(doc, { pages }) {
+      assertPages(pages, doc.pageCount());
+      return { doc: await rebuildFromOrder(doc, pages) };
+    },
+  },
+
+  {
+    id: 'pages.insertBlank', label: 'Insert blank page', group: 'page', icon: 'insert',
+    description: 'Insert a blank page at the given index (0 = before the first page).',
+    agentCallable: true,
+    params: {
+      at: { type: 'int', required: true, min: 0 },
+      width: { type: 'number', default: 612, min: 1 },
+      height: { type: 'number', default: 792, min: 1 },
+    },
+    run(doc, { at, width, height }) {
+      const count = doc.pageCount();
+      if (at > count) throw new Error(`Insert index ${at} out of range (0..${count})`);
+      doc.pdf.insertPage(at, [width, height]);
+      return { doc };
+    },
+  },
+
+  {
+    id: 'pages.scale', label: 'Scale pages', group: 'page', icon: 'scale',
+    description: 'Scale the given pages (content and media box) by a factor.',
+    agentCallable: true,
+    params: {
+      pages: { type: 'array', required: true, items: { type: 'int', min: 0 }, minItems: 1 },
+      factor: { type: 'number', required: true, min: 0.05, max: 20 },
+    },
+    run(doc, { pages, factor }) {
+      assertPages(pages, doc.pageCount());
+      const ps = doc.pdf.getPages();
+      for (const i of pages) ps[i].scale(factor, factor);
+      return { doc };
+    },
+  },
+
+  {
+    id: 'pages.merge', label: 'Merge a PDF', group: 'page', icon: 'merge',
+    description: 'Append (or prepend) all pages of another PDF, supplied as bytes.',
+    agentCallable: true,
+    params: {
+      bytes: { type: 'bytes', required: true },
+      position: { type: 'string', default: 'end', enum: ['end', 'start'] },
+    },
+    async run(doc, { bytes, position }) {
+      const { PDFDocument } = lib();
+      const incoming = await PDFDocument.load(bytes, { ignoreEncryption: true });
+      const indices = incoming.getPageIndices();
+      const copied = await doc.pdf.copyPages(incoming, indices);
+      if (position === 'start') copied.reverse().forEach(p => doc.pdf.insertPage(0, p));
+      else copied.forEach(p => doc.pdf.addPage(p));
+      return { doc };
+    },
+  },
+];
+
+return { ops };
+})();
+
+/* ops/metadata.js */
+const __m_ops_metadata = (() => {
+// ops/metadata.js — document metadata (pdf-lib). View is a non-mutating artifact;
+// edit mutates the info dict in place. Only the fields the caller supplies are
+// touched — omitted fields are left exactly as they were.
+
+const ops = [
+  {
+    id: 'metadata.set', label: 'Edit metadata', group: 'metadata', icon: 'info',
+    description: 'Set document metadata. Only the provided fields are changed; omit a field to leave it untouched. keywords is a comma-or-array list.',
+    agentCallable: true,
+    params: {
+      title:    { type: 'string', maxLength: 2000 },
+      author:   { type: 'string', maxLength: 2000 },
+      subject:  { type: 'string', maxLength: 2000 },
+      keywords: { type: 'any' },
+      creator:  { type: 'string', maxLength: 2000 },
+      producer: { type: 'string', maxLength: 2000 },
+    },
+    run(doc, p) {
+      const pdf = doc.pdf;
+      if (p.title    !== undefined) pdf.setTitle(p.title);
+      if (p.author   !== undefined) pdf.setAuthor(p.author);
+      if (p.subject  !== undefined) pdf.setSubject(p.subject);
+      if (p.creator  !== undefined) pdf.setCreator(p.creator);
+      if (p.producer !== undefined) pdf.setProducer(p.producer);
+      if (p.keywords !== undefined) {
+        const kw = Array.isArray(p.keywords)
+          ? p.keywords
+          : String(p.keywords).split(',').map(s => s.trim()).filter(Boolean);
+        pdf.setKeywords(kw);
+      }
+      return { doc };
+    },
+  },
+
+  {
+    id: 'metadata.get', label: 'View metadata', group: 'metadata', icon: 'info',
+    description: 'Return the document metadata as an object. Does not change the document.',
+    agentCallable: true, mutates: false,
+    params: {},
+    run(doc) { return { artifact: doc.getMetadata() }; },
+  },
+];
+
+return { ops };
+})();
+
+/* ops/index.js */
+const __m_ops_index = (() => {
+// ops/index.js — the one place ops register into the registry. Importing a new op
+// module and adding it here is the entire wiring; the UI, agent face, and conductor
+// all pick it up automatically because they read the registry, not this file.
+
+const registerAll = __m_core_registry.registerAll;
+const openOps = __m_ops_open.ops;
+const pageOps = __m_ops_pages.ops;
+const metadataOps = __m_ops_metadata.ops;
+
+function registerOps() {
+  registerAll([
+    ...openOps,
+    ...pageOps,
+    ...metadataOps,
+  ]);
+}
+
+return { registerOps };
+})();
+
+/* core/keyboard.js */
+const __m_core_keyboard = (() => {
+// keyboard.js — KeyboardGrammar (nakli-creative-primitives convention). Register
+// combos with a context; the dispatcher resolves which binding wins. The suite
+// shares this so every tool's shortcuts read the same way.
+//
+// THE S-COLLISION, RESOLVED (handoff §12): "save" and "strike" both want S.
+//   • mod+s  → Save        — context 'global', always wins (has a modifier).
+//   • s      → Strike tool — context 'viewer', bare key, fires ONLY when a viewer
+//                            has focus and the user is not typing in a field.
+// A modifier'd combo and a bare key never collide because they normalize to
+// different strings ('mod+s' vs 's'). The remaining risk — a bare 's' captured
+// while typing — is removed by the editable-target guard below.
+
+function isEditable(el) {
+  if (!el) return false;
+  const tag = el.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+}
+
+// Normalize a KeyboardEvent to a combo string: '[mod+][shift+][alt+]key'.
+// mod = Cmd on macOS, Ctrl elsewhere.
+function comboOf(ev) {
+  const parts = [];
+  if (ev.metaKey || ev.ctrlKey) parts.push('mod');
+  if (ev.shiftKey) parts.push('shift');
+  if (ev.altKey) parts.push('alt');
+  let k = ev.key;
+  if (k === ' ') k = 'space';
+  else if (k.length === 1) k = k.toLowerCase();
+  else k = k.toLowerCase(); // 'ArrowDown' -> 'arrowdown', 'Escape' -> 'escape'
+  parts.push(k);
+  return parts.join('+');
+}
+
+class KeyboardGrammar {
+  constructor() {
+    this._bindings = new Map();    // combo -> [{ handler, context, when, label }]
+    this._contextResolver = () => ['global'];
+    this._enabled = true;
+  }
+
+  // contextResolver returns the active contexts, most-specific first. A binding
+  // matches if its context is active. 'global' bindings are the fallback.
+  setContextResolver(fn) { this._contextResolver = fn; }
+  enable(v = true) { this._enabled = v; }
+
+  register(combo, handler, { context = 'global', when = null, label = '', description = '' } = {}) {
+    const norm = combo.toLowerCase();
+    if (!this._bindings.has(norm)) this._bindings.set(norm, []);
+    this._bindings.get(norm).push({ handler, context, when, label, description });
+    return this;
+  }
+
+  // The list for a help panel (suite /guide reads this).
+  list() {
+    const out = [];
+    for (const [combo, binds] of this._bindings) for (const b of binds) out.push({ combo, ...b });
+    return out;
+  }
+
+  attach(target = window) {
+    target.addEventListener('keydown', (ev) => this._onKey(ev));
+    return this;
+  }
+
+  _onKey(ev) {
+    if (!this._enabled) return;
+    const combo = comboOf(ev);
+    const binds = this._bindings.get(combo);
+    if (!binds || !binds.length) return;
+
+    const hasModifier = ev.metaKey || ev.ctrlKey;
+    // Bare keys must not fire while typing.
+    if (!hasModifier && isEditable(ev.target)) return;
+
+    const active = this._contextResolver();
+    const order = [...active, 'global'];
+    // Pick the most-specific active context that has a matching binding whose
+    // `when` predicate (if any) passes.
+    for (const ctx of order) {
+      const match = binds.find(b => b.context === ctx && (!b.when || b.when(ev)));
+      if (match) {
+        ev.preventDefault();
+        match.handler(ev);
+        return;
+      }
+    }
+  }
+}
+
+const keyboard = new KeyboardGrammar();
+
+return { KeyboardGrammar, keyboard };
+})();
+
+/* core/runner.js */
+const __m_core_runner = (() => {
+// runner.js — the dispatch + replay engine. The single path every operation takes,
+// no matter which door it came through (UI click, window.sheaf call, conductor brief).
+//
+//   dispatch(id, params, {source})  validate params → run op → install result → log
+//   undo() / redo()                 walk the op-log via nearest snapshot
+//   replayFromFloor()               re-run the WHOLE log from the origin (the M0 gate)
+//   exportPipeline()                the op-log as a re-runnable, model-free artifact
+//
+// Document-mutating ops return { doc }; artifact ops (convert, extract) return
+// { artifact } and are not recorded — they don't change document state.
+
+const state = __m_core_state.state;
+const markDirty = __m_core_state.markDirty;
+const getOp = __m_core_registry.get;
+const validateParams = __m_core_schema.validateParams;
+const SheafDoc = __m_core_doc.SheafDoc;
+const emit = __m_core_events.emit;
+
+// Seed the replay floor when a document opens. The -1 snapshot is the bytes the
+// user opened; every replay starts here. Open ops call this, not the op-log.
+function seedFloor(openedBytes) {
+  state.history.clear();
+  state.history.saveSnapshot(-1, openedBytes);
+  emit('history:changed', historyStatus());
+}
+
+async function dispatch(id, params = {}, { source = 'ui', record = true } = {}) {
+  const op = getOp(id);
+  if (!op) throw new Error(`Unknown operation: ${id}`);
+
+  // The single ingress: coerce + validate params before the op sees them.
+  const clean = validateParams(op.params, params);
+
+  // Open ops may run with no current doc; everything else needs one.
+  if (op.group !== 'open' && !state.doc) throw new Error(`No document open for "${id}"`);
+
+  if (op.group !== 'open') {
+    // Mutating/artifact op on the current doc. runAndNormalize re-parses the result
+    // from its own bytes so getPages()/getPageCount()/metadata are always consistent
+    // (pdf-lib's getPages() cache can go stale after in-place removePage/insertPage)
+    // and so the in-memory doc, the snapshot, and what the renderer derives are the
+    // same byte representation. Costs one re-parse per op — correctness over micro-perf.
+    const r = await runAndNormalize(state.doc, op, clean);
+    if ('artifact' in r) { emit('op:artifact', { id, source }); return { ok: true, artifact: r.artifact }; }
+    state.doc = r.doc;
+    if (record) {
+      const pointer = state.history.push(id, clean);
+      state.history.saveSnapshot(pointer, r.bytes);
+      emit('history:changed', historyStatus());
+    }
+    markDirty(true);
+    emit('doc:changed', { id, source });
+    return { ok: true, doc: r.doc };
+  }
+
+  // Open op: a fresh document. Reset history + view + selection, seed the floor.
+  const newDoc = result_open(await op.run(state.doc, clean), id);
+  state.doc = await newDoc;
+  seedFloor(await state.doc.toBytes());
+  state.view.pageIndex = 0;
+  state.selection = { pages: [], region: null };
+  state.activeTool = null;
+  markDirty(false);
+  emit('doc:loaded', { id, source, pageCount: state.doc.pageCount() });
+  return { ok: true, doc: state.doc };
+}
+
+// Helper: validate an open op's result is a doc.
+function result_open(result, id) {
+  const d = result?.doc;
+  if (!(d instanceof SheafDoc)) throw new Error(`Open op "${id}" must return { doc }`);
+  return d;
+}
+
+// Run an op and, if it mutates, normalize the result through its bytes. Returns
+// { doc, bytes } for mutating ops or { artifact } for artifact ops. The single place
+// ops are executed against a doc — dispatch and replay both go through it, so the live
+// path and the replay path are byte-for-byte identical.
+async function runAndNormalize(doc, op, params) {
+  const res = await op.run(doc, params);
+  if (op.mutates === false) return { artifact: res?.artifact ?? null };
+  const out = res?.doc;
+  if (!(out instanceof SheafDoc)) throw new Error(`Op "${op.id}" must return { doc } but did not`);
+  const bytes = await out.toBytes();
+  return { doc: await SheafDoc.fromBytes(bytes, { validate: false }), bytes };
+}
+
+// Rebuild the document at a target pointer from the nearest snapshot + replayed ops.
+// Shared by undo and redo.
+async function applyToPointer(target) {
+  const { snap, ops } = state.history.getReplayPlan(target);
+  if (!snap) throw new Error('No snapshot floor — document was not opened through the runner');
+  let doc = await SheafDoc.fromBytes(snap.bytes, { validate: false });
+  for (const { op, params } of ops) {
+    const def = getOp(op);
+    if (!def) throw new Error(`Replay hit unknown op "${op}"`);
+    doc = (await runAndNormalize(doc, def, params)).doc;
+  }
+  state.doc = doc;
+  emit('doc:changed', { replay: true });
+}
+
+async function undo() {
+  if (!state.history.canUndo()) return false;
+  state.history.stepBack();
+  await applyToPointer(state.history.pointer);
+  markDirty(state.history.pointer >= 0);
+  emit('history:changed', historyStatus());
+  return true;
+}
+
+async function redo() {
+  if (!state.history.canRedo()) return false;
+  state.history.stepForward();
+  await applyToPointer(state.history.pointer);
+  markDirty(true);
+  emit('history:changed', historyStatus());
+  return true;
+}
+
+// The M0 gate: replay the ENTIRE op-log from the origin (ignoring mid snapshots) and
+// return the reconstructed document. If its fingerprint equals the live document's,
+// the event log fully reconstructs state.
+async function replayFromFloor() {
+  const floor = state.history.getReplayPlan(-1).snap;
+  if (!floor) throw new Error('No floor snapshot to replay from');
+  let doc = await SheafDoc.fromBytes(floor.bytes, { validate: false });
+  for (const { op, params } of state.history.opsUpToPointer()) {
+    const def = getOp(op);
+    doc = (await runAndNormalize(doc, def, params)).doc;
+  }
+  return doc;
+}
+
+// The op-log as a sovereign, re-runnable pipeline (Bench §5). No model needed to
+// replay — the ops are deterministic registry calls.
+function exportPipeline() {
+  return {
+    tool: 'sheaf',
+    version: 1,
+    ops: state.history.opsUpToPointer(),
+  };
+}
+
+function historyStatus() {
+  return {
+    canUndo: state.history.canUndo(),
+    canRedo: state.history.canRedo(),
+    size: state.history.size,
+    pointer: state.history.pointer,
+  };
+}
+
+return { seedFloor, dispatch, undo, redo, replayFromFloor, exportPipeline, historyStatus };
+})();
+
+/* core/agent.js */
+const __m_core_agent = (() => {
+// agent.js — the agent face. `window.sheaf` + URL mode, both dispatching through
+// the SAME runner.dispatch as the human UI. One core, two doors (the third, the
+// Bench conductor, drives this same surface). Off by default — opt-in developer
+// setting — so a random page load or link can never drive someone's document.
+//
+// What the agent face may see: the operation catalog and minimal document context
+// (page geometry, metadata, field list) — NEVER page content, extracted text, or
+// form values. The document stays put; the registry executes locally on the full file.
+
+const state = __m_core_state.state;
+const dispatch = __m_core_runner.dispatch;
+const exportPipeline = __m_core_runner.exportPipeline;
+const undo = __m_core_runner.undo;
+const redo = __m_core_runner.redo;
+const historyStatus = __m_core_runner.historyStatus;
+const getOp = __m_core_registry.get;
+const catalog = __m_core_registry.catalog;
+const emit = __m_core_events.emit;
+const loadEngine = __m_core_engines.loadEngine;
+const isLoaded = __m_core_engines.isLoaded;
+
+function requireAgentCallable(id) {
+  const op = getOp(id);
+  if (!op) throw new Error(`Unknown operation: ${id}`);
+  if (!op.agentCallable) throw new Error(`Operation "${id}" is not agent-callable`);
+  return op;
+}
+
+// window.sheaf must be self-sufficient — an agent driving it shouldn't have to
+// preload engines the way the UI does. Ensure the core write engine before any op.
+async function ensureCoreEngine() {
+  if (!isLoaded('pdf-lib')) await loadEngine('pdf-lib');
+}
+
+// Minimal, content-free document context — the conductor's view.
+function docContext() {
+  if (!state.doc) return { open: false };
+  return {
+    open: true,
+    fileName: state.session.fileName,
+    pageCount: state.doc.pageCount(),
+    pages: state.doc.pages(),       // geometry only: {index,width,height,rotation}
+    metadata: state.doc.getMetadata(),
+    dirty: state.dirty,
+    history: historyStatus(),
+  };
+}
+
+function buildApi() {
+  return Object.freeze({
+    version: 1,
+    // The vocabulary: agent-callable ops, their params, descriptions.
+    ops: () => catalog({ agentCallableOnly: true }),
+    // Minimal context — never content.
+    context: () => docContext(),
+    // Drive an op through the one runner. Agent-callable ops only.
+    run: async (id, params = {}) => {
+      requireAgentCallable(id);
+      await ensureCoreEngine();
+      return dispatch(id, params, { source: 'agent' });
+    },
+    undo, redo,
+    // Export the current document bytes (the user's own file) or the op-log as a
+    // sovereign, model-free pipeline.
+    bytes: async () => (state.doc ? state.doc.toBytes() : null),
+    pipeline: () => exportPipeline(),
+    // Replay a saved pipeline against the current document.
+    runPipeline: async (pipe) => {
+      if (!pipe || pipe.tool !== 'sheaf' || !Array.isArray(pipe.ops)) throw new Error('Not a Sheaf pipeline');
+      await ensureCoreEngine();
+      const results = [];
+      for (const { op, params } of pipe.ops) {
+        requireAgentCallable(op);
+        results.push(await dispatch(op, params, { source: 'agent' }));
+      }
+      return results;
+    },
+  });
+}
+
+// Install / remove window.sheaf based on the developer setting.
+function refreshAgentFace() {
+  if (typeof window === 'undefined') return;
+  if (state.dev.agentFace) {
+    window.sheaf = buildApi();
+    emit('agent:enabled', null);
+  } else if (window.sheaf) {
+    delete window.sheaf;
+    emit('agent:disabled', null);
+  }
+}
+
+function setAgentFace(on) {
+  state.dev.agentFace = !!on;
+  emit('prefs:save', null);
+  refreshAgentFace();
+}
+
+// URL mode: ?op=<id>&p.<name>=<value>&format=json — headless invocation that also
+// makes the tool testable. Gated behind the same developer setting; a link cannot
+// silently run ops on someone's machine.
+async function handleUrlMode() {
+  if (typeof window === 'undefined') return false;
+  const q = new URLSearchParams(window.location.search);
+  const opId = q.get('op');
+  if (!opId) return false;
+  if (!state.dev.agentFace) {
+    console.warn('[sheaf] URL op ignored — agent face is off. Enable it in settings to allow headless ops.');
+    return false;
+  }
+  const params = {};
+  for (const [k, v] of q) {
+    if (k.startsWith('p.')) {
+      try { params[k.slice(2)] = JSON.parse(v); } catch { params[k.slice(2)] = v; }
+    }
+  }
+  try {
+    requireAgentCallable(opId);
+    await ensureCoreEngine();
+    const res = await dispatch(opId, params, { source: 'url' });
+    if (q.get('format') === 'json') {
+      document.documentElement.dataset.sheafResult = JSON.stringify({ ok: true, context: docContext() });
+    }
+    return res;
+  } catch (err) {
+    console.error('[sheaf] URL op failed:', err.message);
+    if (q.get('format') === 'json') document.documentElement.dataset.sheafResult = JSON.stringify({ ok: false, error: err.message });
+    return false;
+  }
+}
+
+return { refreshAgentFace, setAgentFace, handleUrlMode };
+})();
+
+/* ui/dom.js */
+const __m_ui_dom = (() => {
+// dom.js — the tiniest DOM helper. el('div.foo', {props}, [children]).
+
+function el(spec, props = {}, children = []) {
+  const [tag, ...classes] = spec.split('.');
+  const node = document.createElement(tag || 'div');
+  if (classes.length) node.className = classes.join(' ');
+  for (const [k, v] of Object.entries(props)) {
+    if (k === 'class') node.className = v;
+    else if (k === 'html') node.innerHTML = v;
+    else if (k === 'text') node.textContent = v;
+    else if (k === 'dataset') Object.assign(node.dataset, v);
+    else if (k.startsWith('on') && typeof v === 'function') node.addEventListener(k.slice(2).toLowerCase(), v);
+    else if (k === 'disabled' || k === 'checked' || k === 'hidden') { if (v) node.setAttribute(k, ''); else node.removeAttribute(k); node[k] = v; }
+    else if (v != null) node.setAttribute(k, v);
+  }
+  for (const c of [].concat(children)) { if (c != null) node.append(c.nodeType ? c : document.createTextNode(c)); }
+  return node;
+}
+
+function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); return node; }
+function $(sel, root = document) { return root.querySelector(sel); }
+
+return { el, clear };
+})();
+
+/* ui/toast.js */
+const __m_ui_toast = (() => {
+// toast.js — transient notifications + the global error net. Errors are LOUD and
+// recoverable (handoff §8): an exception anywhere surfaces here instead of dying
+// silently. The reporter itself must never throw.
+
+const el = __m_ui_dom.el;
+const on = __m_core_events.on;
+
+let _root = null;
+function root() { return _root || (_root = document.getElementById('toasts')); }
+
+function toast(message, level = 'ok', { detail = '', duration = 3200 } = {}) {
+  try {
+    const node = el('div.toast', { class: `toast ${level}`, role: 'status' }, [
+      el('span', { text: message }),
+      detail ? el('span.detail', { text: detail }) : null,
+    ]);
+    root().append(node);
+    if (duration) setTimeout(() => { node.style.opacity = '0'; setTimeout(() => node.remove(), 200); }, duration);
+    return node;
+  } catch { /* a failing reporter must not cascade */ return null; }
+}
+
+// Global error surface — the highest-leverage net in any browser app. Wired once.
+let _last = 0;
+function installErrorNet() {
+  const surface = (kind, e) => {
+    try {
+      console.error(`[${kind}]`, e);
+      const now = Date.now();
+      if (now - _last < 1500) return; // throttle bursts
+      _last = now;
+      const msg = (e && (e.message || e.reason?.message)) || String(e);
+      toast('Something went wrong', 'err', { detail: `${msg} (see console)`, duration: 6000 });
+    } catch {}
+  };
+  addEventListener('error', (e) => { if (e.error || e.message) surface('uncaught', e.error || e.message); });
+  addEventListener('unhandledrejection', (e) => surface('rejection', e.reason || e));
+  // App-emitted errors route here too.
+  on('error', (d) => toast(d?.message || 'Error', 'err', { detail: d?.detail || '', duration: 6000 }));
+  on('toast', (d) => toast(d?.message || '', d?.level || 'ok', { detail: d?.detail, duration: d?.duration }));
+}
+
+return { toast, installErrorNet };
+})();
+
+/* ui/icons.js */
+const __m_ui_icons = (() => {
+// icons.js — one consistent icon family (24×24, stroke, suite-standard). Inline so
+// the single-file build carries them; ARIA labels live on the buttons, not here.
+
+const P = {
+  open:    '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  new:     '<path d="M14 3v5h5"/><path d="M6 3h8l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M12 11v6M9 14h6"/>',
+  save:    '<path d="M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M7 3v5h8M7 21v-7h10v7"/>',
+  saveas:  '<path d="M5 3h9l5 5v6"/><path d="M3 5a2 2 0 0 1 2-2"/><path d="M16 21v-5h5M18.5 18.5 21 21"/><path d="M7 3v5h7"/>',
+  undo:    '<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 5 5v1"/>',
+  redo:    '<path d="m15 14 5-5-5-5"/><path d="M20 9H9a5 5 0 0 0-5 5v1"/>',
+  rotate:  '<path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v5h-5"/>',
+  trash:   '<path d="M4 7h16M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"/>',
+  copy:    '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/>',
+  reorder: '<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
+  insert:  '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M12 8v8M8 12h8"/>',
+  extract: '<path d="M9 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-3"/><path d="M14 3h6v6M20 3l-8 8"/>',
+  scale:   '<path d="M4 4h7v7H4z"/><path d="M14 14h6v6h-6z"/><path d="M11 4h9v9"/>',
+  merge:   '<path d="M7 3v6a4 4 0 0 0 4 4h2a4 4 0 0 1 4 4v4"/><path d="M14 18l3 3 3-3M4 6l3-3 3 3"/>',
+  info:    '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  settings:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H1a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 2.6 7a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H7a1.6 1.6 0 0 0 1-1.5V1a2 2 0 1 1 4 0v.1A1.6 1.6 0 0 0 17 2.6a1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V7a1.6 1.6 0 0 0 1.5 1H23a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/>',
+  help:    '<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 4.5 1.5c0 1.7-2.5 2-2.5 3.5M12 17h.01"/>',
+  sun:     '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  moon:    '<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/>',
+  pages:   '<rect x="4" y="3" width="14" height="18" rx="2"/><path d="M8 3v18"/>',
+  zoomin:  '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4M11 8v6M8 11h6"/>',
+  zoomout: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4M8 11h6"/>',
+};
+
+function icon(name) {
+  const body = P[name] || '';
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+}
+
+return { icon };
+})();
+
+/* core/render.js */
+const __m_core_render = (() => {
+// render.js — the render/text-layer side of the nakli-doc adapter (PDF.js, browser).
+// Pixels are *derived* from the document model's bytes; doc.js (pdf-lib) stays the
+// source of truth. After a mutating op the viewer re-derives a render doc from the
+// new bytes. This split keeps the structure side (and the M0 gate) browser-free.
+
+const loadEngine = __m_core_engines.loadEngine;
+const pdfjsWorkerUrl = __m_core_engines.pdfjsWorkerUrl;
+const isLoaded = __m_core_engines.isLoaded;
+const getEngine = __m_core_engines.getEngine;
+
+let _ready = null;
+
+async function ensurePdfjs() {
+  if (_ready) return _ready;
+  _ready = (async () => {
+    const pdfjs = isLoaded('pdfjs') ? getEngine('pdfjs') : await loadEngine('pdfjs');
+    // Worker pinned + same-origin (worker-src 'self').
+    pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl();
+    return pdfjs;
+  })();
+  return _ready;
+}
+
+// Parse bytes into a PDF.js document proxy for rendering. PDF.js may detach the
+// buffer it's given, so we hand it a copy — never our canonical bytes.
+async function openForRender(bytes) {
+  const pdfjs = await ensurePdfjs();
+  const data = bytes.slice(0);
+  const task = pdfjs.getDocument({ data, isEvalSupported: false });
+  return task.promise; // PDFDocumentProxy — caller must .destroy() when replacing
+}
+
+// How long to wait for a single page's render promise before moving on. The canvas
+// paints incrementally as the operator list executes, so on timeout the page is
+// usually already visible — we just stop blocking the viewport on a render that is
+// pathologically slow (a huge/complex page) or whose promise never settles. Degrade
+// clean, never freeze (handoff §8).
+const RENDER_TIMEOUT_MS = 12000;
+
+// Render one page (0-based) into a canvas at the given scale. Resolves with the CSS
+// px size, or { timedOut:true } if the render did not settle in time (the canvas may
+// still have painted). Never rejects on timeout — the caller keeps going.
+async function renderPage(pdf, pageIndex, scale, canvas) {
+  const page = await pdf.getPage(pageIndex + 1);
+  const viewport = page.getViewport({ scale });
+  const ratio = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+  canvas.width = Math.floor(viewport.width * ratio);
+  canvas.height = Math.floor(viewport.height * ratio);
+  canvas.style.width = `${Math.floor(viewport.width)}px`;
+  canvas.style.height = `${Math.floor(viewport.height)}px`;
+  const ctx = canvas.getContext('2d');
+  const task = page.render({ canvasContext: ctx, viewport, transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : null });
+  let timer;
+  const timeout = new Promise((res) => { timer = setTimeout(() => res({ timedOut: true }), RENDER_TIMEOUT_MS); });
+  try {
+    const r = await Promise.race([task.promise.then(() => ({ ok: true })), timeout]);
+    if (r.timedOut) { try { task.cancel(); } catch {} return { width: viewport.width, height: viewport.height, timedOut: true }; }
+    return { width: viewport.width, height: viewport.height };
+  } finally { clearTimeout(timer); }
+}
+
+// Extract the concatenated text of a page (search, and the M3 text layer).
+async function pageText(pdf, pageIndex) {
+  const page = await pdf.getPage(pageIndex + 1);
+  const tc = await page.getTextContent();
+  return tc.items.map(i => i.str).join(' ');
+}
+
+// Does the document have any extractable text? (welcome/empty heuristics, OCR hint.)
+async function hasTextLayer(pdf) {
+  const n = Math.min(pdf.numPages, 3);
+  for (let i = 0; i < n; i++) { if ((await pageText(pdf, i)).trim().length > 0) return true; }
+  return false;
+}
+
+return { ensurePdfjs, openForRender, renderPage, pageText, hasTextLayer };
+})();
+
+/* ui/rendoc.js */
+const __m_ui_rendoc = (() => {
+// rendoc.js — owns the lifecycle of the current PDF.js render proxy. The structure
+// model (doc.js) is the source of truth; whenever it changes we re-derive pixels
+// from its bytes. A monotonic token guards against an older rebuild finishing after
+// a newer one (op spam / fast undo-redo).
+
+const openForRender = __m_core_render.openForRender;
+const state = __m_core_state.state;
+const on = __m_core_events.on;
+const emit = __m_core_events.emit;
+
+let _pdf = null;
+let _token = 0;
+
+function currentRenderDoc() { return _pdf; }
+
+async function rebuild() {
+  const my = ++_token;
+  if (!_pdf && !state.doc) return;
+  if (!state.doc) { destroy(); emit('rendoc:cleared', null); return; }
+  let bytes, pdf;
+  try {
+    bytes = await state.doc.toBytes();
+    pdf = await openForRender(bytes);
+  } catch (e) {
+    emit('error', { message: 'Could not render the document', detail: e.message });
+    return;
+  }
+  if (my !== _token) { pdf.destroy?.(); return; } // superseded
+  if (_pdf) _pdf.destroy?.();
+  _pdf = pdf;
+  emit('rendoc:ready', { pageCount: pdf.numPages });
+}
+
+function destroy() { if (_pdf) { _pdf.destroy?.(); _pdf = null; } }
+
+function initRenderDoc() {
+  on('doc:loaded', rebuild);
+  on('doc:changed', rebuild);
+  on('doc:closed', () => { destroy(); emit('rendoc:cleared', null); });
+}
+
+return { currentRenderDoc, initRenderDoc };
+})();
+
+/* ui/viewer.js */
+const __m_ui_viewer = (() => {
+// viewer.js — the page surface. Renders the current render-doc's pages continuously
+// into #viewport, tracks the visible page, and owns zoom / fit. Re-renders on
+// rendoc:ready (document changed) and on view changes.
+//
+// M1 renders every page at the computed scale. Virtualized rendering (render only
+// near-viewport pages) is a known later optimization; flagged, not silently capped.
+
+const el = __m_ui_dom.el;
+const clear = __m_ui_dom.clear;
+const state = __m_core_state.state;
+const on = __m_core_events.on;
+const emit = __m_core_events.emit;
+const renderPage = __m_core_render.renderPage;
+const currentRenderDoc = __m_ui_rendoc.currentRenderDoc;
+
+const PAD = 16;
+let viewport = null;
+let renderToken = 0;
+
+function initViewer() {
+  viewport = document.getElementById('viewport');
+  on('rendoc:ready', () => renderAll());
+  on('rendoc:cleared', () => clear(viewport));
+  on('view:changed', () => renderAll());
+  viewport.addEventListener('scroll', trackCurrentPage, { passive: true });
+  let rT;
+  window.addEventListener('resize', () => { clearTimeout(rT); rT = setTimeout(() => { if (state.view.fitMode === 'width' || state.view.fitMode === 'page') renderAll(); }, 150); });
+}
+
+function scaleForPage(p) {
+  const avail = viewport.clientWidth - PAD * 2;
+  const availH = viewport.clientHeight - PAD * 2;
+  switch (state.view.fitMode) {
+    case 'width':  return Math.max(0.1, avail / p.width);
+    case 'page':   return Math.max(0.1, Math.min(avail / p.width, availH / p.height));
+    case 'actual': return 1.0;
+    default:       return state.view.zoom; // 'custom'
+  }
+}
+
+async function renderAll() {
+  const pdf = currentRenderDoc();
+  if (!pdf || !state.doc) return;
+  const my = ++renderToken;
+  const pages = state.doc.pages();
+  clear(viewport);
+
+  // Build every page's wrap synchronously so the viewport's shape + page count are
+  // honest immediately (dim-never-hide); then render concurrently. One slow or stuck
+  // page can't block the rest, and the thumbnail rail derives from these canvases
+  // (page:painted) rather than rendering the same page proxy a second time.
+  const slots = pages.map((p) => {
+    const canvas = el('canvas', { 'aria-label': `Page ${p.index + 1}` });
+    const wrap = el('div.page-wrap', { dataset: { page: String(p.index) } }, [canvas, el('div.badge', { text: `${p.index + 1}` })]);
+    viewport.append(wrap);
+    return { p, canvas, wrap };
+  });
+
+  await Promise.all(slots.map(async ({ p, canvas, wrap }) => {
+    if (my !== renderToken) return;
+    try {
+      const r = await renderPage(pdf, p.index, scaleForPage(p), canvas);
+      if (my !== renderToken) return;
+      if (r?.timedOut) wrap.append(el('div.badge', { text: 'still rendering…', style: 'top:auto;bottom:6px;left:6px' }));
+      emit('page:painted', { index: p.index, canvas, width: r.width, height: r.height });
+    } catch {
+      if (my === renderToken) wrap.append(el('div.badge', { text: 'render failed', style: 'top:auto;bottom:6px;left:6px;color:var(--danger)' }));
+    }
+  }));
+  if (my === renderToken) emit('viewer:rendered', { pageCount: pages.length });
+}
+
+function trackCurrentPage() {
+  if (!viewport) return;
+  const mid = viewport.scrollTop + viewport.clientHeight / 2;
+  let best = 0, bestDist = Infinity;
+  for (const wrap of viewport.querySelectorAll('.page-wrap')) {
+    const center = wrap.offsetTop + wrap.offsetHeight / 2;
+    const d = Math.abs(center - mid);
+    if (d < bestDist) { bestDist = d; best = Number(wrap.dataset.page); }
+  }
+  if (best !== state.view.pageIndex) { state.view.pageIndex = best; emit('page:current', { index: best }); }
+}
+
+function setFitMode(mode) {
+  state.view.fitMode = mode;
+  if (mode !== 'custom') emit('prefs:save', null);
+  emit('view:changed', null);
+}
+
+function zoomBy(factor) {
+  const base = state.view.fitMode === 'custom' ? state.view.zoom : effectiveCurrentScale();
+  state.view.zoom = Math.max(0.1, Math.min(8, base * factor));
+  state.view.fitMode = 'custom';
+  emit('view:changed', null);
+}
+
+function effectiveCurrentScale() {
+  const pages = state.doc?.pages();
+  if (!pages?.length) return 1;
+  return scaleForPage(pages[state.view.pageIndex] || pages[0]);
+}
+
+function currentScalePct() { return Math.round(effectiveCurrentScale() * 100); }
+
+function scrollToPage(index) {
+  const wrap = viewport.querySelector(`.page-wrap[data-page="${index}"]`);
+  wrap?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+return { initViewer, setFitMode, zoomBy, currentScalePct, scrollToPage };
+})();
+
+/* ui/thumbs.js */
+const __m_ui_thumbs = (() => {
+// thumbs.js — the page rail. Thumbnails, multi-select (the target set for page ops),
+// current-page sync, and drag-to-reorder (dispatches pages.reorder through the one
+// runner — the same op the agent face calls).
+
+const el = __m_ui_dom.el;
+const clear = __m_ui_dom.clear;
+const state = __m_core_state.state;
+const on = __m_core_events.on;
+const emit = __m_core_events.emit;
+const dispatch = __m_core_runner.dispatch;
+const scrollToPage = __m_ui_viewer.scrollToPage;
+
+const THUMB_W = 140;
+let rail = null;
+let dragFrom = null;
+
+function initThumbs() {
+  rail = document.getElementById('rail');
+  on('rendoc:ready', () => buildSkeleton());
+  on('rendoc:cleared', () => clear(rail));
+  on('page:painted', ({ index, canvas }) => fillThumb(index, canvas));
+  on('page:current', ({ index }) => highlightCurrent(index));
+  on('selection:changed', () => paintSelection());
+}
+
+function selectedPages() { return state.selection.pages.slice().sort((a, b) => a - b); }
+function setSelection(pages) { state.selection.pages = pages; emit('selection:changed', null); }
+
+// Build the rail skeleton (one thumb per page, correctly sized) immediately from the
+// page geometry. Thumbnails are filled by downscaling the viewer's painted canvases
+// (page:painted) — Sheaf never renders the same page proxy twice.
+function buildSkeleton() {
+  if (!state.doc) return;
+  const pages = state.doc.pages();
+  clear(rail);
+  state.selection.pages = state.selection.pages.filter(i => i < pages.length);
+  for (const p of pages) {
+    const canvas = el('canvas', { width: THUMB_W, height: Math.round(THUMB_W * p.height / p.width) });
+    const thumb = el('div.thumb', {
+      dataset: { page: String(p.index) },
+      role: 'option', 'aria-label': `Page ${p.index + 1}`, tabindex: '0', draggable: 'true',
+      onClick: (e) => onThumbClick(e, p.index),
+      onKeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onThumbClick(e, p.index); } },
+      onDragstart: (e) => { dragFrom = p.index; e.dataTransfer.effectAllowed = 'move'; },
+      onDragover: (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; },
+      onDrop: (e) => { e.preventDefault(); onDrop(p.index); },
+    }, [canvas, el('div.pno', { text: String(p.index + 1) })]);
+    rail.append(thumb);
+  }
+  paintSelection();
+  highlightCurrent(state.view.pageIndex);
+}
+
+// Downscale a freshly-painted viewer canvas into the matching thumbnail.
+function fillThumb(index, srcCanvas) {
+  const thumb = rail?.querySelector(`.thumb[data-page="${index}"] canvas`);
+  if (!thumb || !srcCanvas?.width) return;
+  try {
+    const ctx = thumb.getContext('2d');
+    ctx.clearRect(0, 0, thumb.width, thumb.height);
+    ctx.drawImage(srcCanvas, 0, 0, thumb.width, thumb.height);
+  } catch {}
+}
+
+function onThumbClick(e, index) {
+  const sel = state.selection.pages;
+  if (e.shiftKey && sel.length) {
+    const last = sel[sel.length - 1];
+    const [a, b] = [Math.min(last, index), Math.max(last, index)];
+    const range = []; for (let i = a; i <= b; i++) range.push(i);
+    setSelection([...new Set([...sel, ...range])]);
+  } else if (e.metaKey || e.ctrlKey) {
+    setSelection(sel.includes(index) ? sel.filter(i => i !== index) : [...sel, index]);
+  } else {
+    setSelection([index]);
+    scrollToPage(index);
+  }
+}
+
+async function onDrop(toIndex) {
+  if (dragFrom == null || dragFrom === toIndex) { dragFrom = null; return; }
+  const n = state.doc.pageCount();
+  const order = [...Array(n).keys()];
+  const [moved] = order.splice(dragFrom, 1);
+  order.splice(toIndex, 0, moved);
+  dragFrom = null;
+  await dispatch('pages.reorder', { order }, { source: 'ui' });
+  setSelection([toIndex]);
+}
+
+function paintSelection() {
+  if (!rail) return;
+  const sel = new Set(state.selection.pages);
+  for (const t of rail.querySelectorAll('.thumb')) t.classList.toggle('selected', sel.has(Number(t.dataset.page)));
+  emit('selection:count', { count: sel.size });
+}
+
+function highlightCurrent(index) {
+  if (!rail) return;
+  for (const t of rail.querySelectorAll('.thumb')) t.classList.toggle('current', Number(t.dataset.page) === index);
+}
+
+return { initThumbs, selectedPages };
+})();
+
+/* ui/modal.js */
+const __m_ui_modal = (() => {
+// modal.js — in-app prompt/confirm/forms (never native dialogs, handoff §8).
+// Focus is trapped on open and restored on close; Esc cancels; the scrim cancels.
+
+const el = __m_ui_dom.el;
+const clear = __m_ui_dom.clear;
+const emit = __m_core_events.emit;
+
+let _root = null;
+function root() { return _root || (_root = document.getElementById('modal-root')); }
+
+// Low-level: render a modal, resolve with `result` when closed.
+function openModal({ title, content, actions = [], dismissable = true, onMount } = {}) {
+  return new Promise((resolve) => {
+    const r = root();
+    const prevFocus = document.activeElement;
+    const close = (value) => {
+      r.classList.remove('open'); clear(r);
+      document.removeEventListener('keydown', onKey, true);
+      if (prevFocus && prevFocus.focus) prevFocus.focus();
+      emit('modal:close', null);
+      resolve(value);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape' && dismissable) { e.preventDefault(); close(null); }
+      if (e.key === 'Tab') trapTab(e, modal);
+    };
+
+    const foot = el('div.foot', {}, actions.map(a =>
+      el('button', {
+        class: `btn ${a.kind === 'primary' ? 'primary' : ''} ${a.kind === 'danger' ? 'danger' : ''}`,
+        onClick: () => { const v = typeof a.value === 'function' ? a.value() : a.value; if (v !== undefined) close(v); },
+      }, [a.label])
+    ));
+
+    const bodyNode = typeof content === 'function' ? content({ close }) : content;
+    const modal = el('div.modal', { role: 'dialog', 'aria-modal': 'true', 'aria-label': title || 'Dialog' }, [
+      title ? el('h2', { text: title }) : null,
+      el('div.body', {}, [bodyNode]),
+      actions.length ? foot : null,
+    ]);
+
+    clear(r).append(el('div.scrim', { onClick: () => dismissable && close(null) }), modal);
+    r.classList.add('open');
+    emit('modal:open', null);
+    document.addEventListener('keydown', onKey, true);
+    onMount?.({ close, modal });
+    const first = modal.querySelector('input, select, textarea, button.primary, button');
+    first?.focus();
+  });
+}
+
+function trapTab(e, container) {
+  const f = [...container.querySelectorAll('button, input, select, textarea, [tabindex]')].filter(n => !n.disabled && n.offsetParent !== null);
+  if (!f.length) return;
+  const first = f[0], last = f[f.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+}
+
+function confirmModal(message, { title = 'Confirm', okLabel = 'OK', danger = false } = {}) {
+  return openModal({
+    title,
+    content: el('p', { text: message }),
+    actions: [
+      { label: 'Cancel', value: false },
+      { label: okLabel, kind: danger ? 'danger' : 'primary', value: true },
+    ],
+  });
+}
+
+// fields: [{ name, label, type='text', value, options:[{value,label}], min, max, placeholder }]
+function formModal(title, fields, { okLabel = 'Save' } = {}) {
+  const inputs = {};
+  const content = () => {
+    const body = el('div', {}, fields.map(f => {
+      let input;
+      if (f.type === 'select') {
+        input = el('select', {}, (f.options || []).map(o => el('option', { value: o.value, selected: o.value === f.value }, [o.label])));
+      } else {
+        input = el('input', { type: f.type || 'text', value: f.value ?? '', placeholder: f.placeholder || '', min: f.min, max: f.max });
+      }
+      inputs[f.name] = input;
+      return el('label', {}, [f.label, input]);
+    }));
+    return body;
+  };
+  return openModal({
+    title, content,
+    actions: [
+      { label: 'Cancel', value: null },
+      { label: okLabel, kind: 'primary', value: () => {
+        const out = {};
+        for (const f of fields) { const v = inputs[f.name].value; out[f.name] = f.type === 'number' ? Number(v) : v; }
+        return out;
+      } },
+    ],
+  });
+}
+
+return { openModal, confirmModal, formModal };
+})();
+
+/* core/storage.js */
+const __m_core_storage = (() => {
+// storage.js — the storage façade. FSA (their folder) → OPFS (crash-recovery
+// staging) → IndexedDB (fallback, always available). Order matters; mirror down.
+//
+// SOVEREIGNTY INVARIANT — what may persist, and where:
+//   localStorage : UI prefs only (state.js)
+//   IndexedDB    : recent FSA handles + the signature library. Nothing else.
+//   OPFS         : crash-recovery staging of the working bytes — opt-in, wiped on
+//                  clean close. This is the ONE place document bytes may briefly
+//                  live, and only to survive a crash; it is not durable persistence.
+//   NEVER        : PDF content / page bytes / extracted text / form values in
+//                  localStorage or IndexedDB.
+//
+// Filenames are pinned on first save and never re-derived from a mutable title.
+
+const hasFSA = typeof window !== 'undefined' && 'showOpenFilePicker' in window;
+const hasOPFS = typeof navigator !== 'undefined' && navigator.storage && 'getDirectory' in navigator.storage;
+
+// ── IndexedDB (handles + signatures) ───────────────────────────────────────────
+
+const DB_NAME = 'sheaf';
+const DB_VERSION = 1;
+let _dbp = null;
+
+function db() {
+  if (_dbp) return _dbp;
+  _dbp = new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      const d = req.result;
+      if (!d.objectStoreNames.contains('handles')) d.createObjectStore('handles', { keyPath: 'id' });
+      if (!d.objectStoreNames.contains('signatures')) d.createObjectStore('signatures', { keyPath: 'id' });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return _dbp;
+}
+
+async function idbPut(store, value) {
+  const d = await db();
+  return new Promise((res, rej) => {
+    const tx = d.transaction(store, 'readwrite');
+    tx.objectStore(store).put(value);
+    tx.oncomplete = () => res(true); tx.onerror = () => rej(tx.error);
+  });
+}
+async function idbGetAll(store) {
+  const d = await db();
+  return new Promise((res, rej) => {
+    const tx = d.transaction(store, 'readonly');
+    const req = tx.objectStore(store).getAll();
+    req.onsuccess = () => res(req.result || []); req.onerror = () => rej(req.error);
+  });
+}
+async function idbDelete(store, id) {
+  const d = await db();
+  return new Promise((res, rej) => {
+    const tx = d.transaction(store, 'readwrite');
+    tx.objectStore(store).delete(id);
+    tx.oncomplete = () => res(true); tx.onerror = () => rej(tx.error);
+  });
+}
+
+// Recent FSA handles — store the handle object itself (structured-clonable) so the
+// file can be re-opened on a later visit after a permission re-grant. NO bytes.
+const MAX_RECENT = 10;
+async function rememberHandle(handle, name) {
+  if (!handle) return;
+  const id = name || handle.name || String(Math.random());
+  await idbPut('handles', { id, handle, name: id, kind: handle.kind, at: nowStamp() });
+  const all = (await idbGetAll('handles')).sort((a, b) => (b.at || '').localeCompare(a.at || ''));
+  for (const old of all.slice(MAX_RECENT)) await idbDelete('handles', old.id);
+}
+async function recentHandles() {
+  return (await idbGetAll('handles')).sort((a, b) => (b.at || '').localeCompare(a.at || ''));
+}
+async function forgetHandle(id) { return idbDelete('handles', id); }
+
+// Signature library (M4 fills this in; the store + API exist from M0 so Sign rides
+// the façade rather than inventing its own storage).
+async function saveSignature(sig) { return idbPut('signatures', sig); }
+async function listSignatures() { return idbGetAll('signatures'); }
+async function deleteSignature(id) { return idbDelete('signatures', id); }
+
+// ── Permission re-grant (FSA handles need it on revisit) ────────────────────────
+
+async function ensurePermission(handle, mode = 'read') {
+  if (!handle?.queryPermission) return true;
+  if ((await handle.queryPermission({ mode })) === 'granted') return true;
+  return (await handle.requestPermission({ mode })) === 'granted';
+}
+
+// ── FSA open / save + download fallback ─────────────────────────────────────────
+
+async function pickAndReadPdf() {
+  const [handle] = await window.showOpenFilePicker({
+    types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }],
+    multiple: false,
+  });
+  const file = await handle.getFile();
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  return { handle, name: file.name, bytes };
+}
+
+function readPdfViaInput() {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'application/pdf,.pdf';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return resolve(null);
+      resolve({ handle: null, name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) });
+    };
+    input.click();
+  });
+}
+
+async function saveToHandle(handle, bytes) {
+  const writable = await handle.createWritable();
+  await writable.write(bytes);
+  await writable.close();
+}
+
+async function saveAs(bytes, suggestedName) {
+  if (hasFSA && window.showSaveFilePicker) {
+    const handle = await window.showSaveFilePicker({
+      suggestedName,
+      types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }],
+    });
+    await saveToHandle(handle, bytes);
+    return handle;
+  }
+  downloadBytes(bytes, suggestedName);
+  return null;
+}
+
+function downloadBytes(bytes, name) {
+  const blob = new Blob([bytes], { type: 'application/pdf' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name || 'document.pdf';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+// ── OPFS crash-recovery staging (opt-in; wiped on clean close) ───────────────────
+
+const STAGE_FILE = 'sheaf-working.pdf';
+const STAGE_META = 'sheaf-working.json';
+
+async function stageWorking(bytes, meta = {}) {
+  if (!hasOPFS) return false;
+  try {
+    const root = await navigator.storage.getDirectory();
+    const fh = await root.getFileHandle(STAGE_FILE, { create: true });
+    const w = await fh.createWritable(); await w.write(bytes); await w.close();
+    const mh = await root.getFileHandle(STAGE_META, { create: true });
+    const mw = await mh.createWritable(); await mw.write(JSON.stringify({ ...meta, at: nowStamp() })); await mw.close();
+    return true;
+  } catch { return false; }
+}
+async function recoverStaged() {
+  if (!hasOPFS) return null;
+  try {
+    const root = await navigator.storage.getDirectory();
+    const fh = await root.getFileHandle(STAGE_FILE);
+    const meta = await (await (await root.getFileHandle(STAGE_META)).getFile()).text().then(JSON.parse).catch(() => ({}));
+    const bytes = new Uint8Array(await (await fh.getFile()).arrayBuffer());
+    return { bytes, meta };
+  } catch { return null; }
+}
+async function clearStage() {
+  if (!hasOPFS) return;
+  try {
+    const root = await navigator.storage.getDirectory();
+    await root.removeEntry(STAGE_FILE).catch(() => {});
+    await root.removeEntry(STAGE_META).catch(() => {});
+  } catch {}
+}
+
+function nowStamp() { return new Date().toISOString(); }
+
+return { hasFSA, hasOPFS, rememberHandle, recentHandles, forgetHandle, saveSignature, listSignatures, deleteSignature, ensurePermission, pickAndReadPdf, readPdfViaInput, saveToHandle, saveAs, downloadBytes, stageWorking, recoverStaged, clearStage };
+})();
+
+/* ui/engines-ui.js */
+const __m_ui_engines_ui = (() => {
+// engines-ui.js — UI-side lazy loading of the core engines, with a loading-bar
+// signal. pdf-lib and pdfjs are document engines (not models), so they load on first
+// use without a prompt; the prompt-first rule is reserved for multi-MB models
+// (Tesseract language data, the AI sidecar) which come in later milestones.
+
+const loadEngine = __m_core_engines.loadEngine;
+const isLoaded = __m_core_engines.isLoaded;
+const emit = __m_core_events.emit;
+
+let _pdfLib = null;
+
+async function ensurePdfLib() {
+  if (isLoaded('pdf-lib')) return;
+  if (!_pdfLib) {
+    emit('loading', { on: true });
+    _pdfLib = loadEngine('pdf-lib')
+      .catch((e) => { emit('error', { message: 'Could not load the PDF engine', detail: e.message }); throw e; })
+      .finally(() => emit('loading', { on: false }));
+  }
+  return _pdfLib;
+}
+
+return { ensurePdfLib };
+})();
+
+/* ui/fileops.js */
+const __m_ui_fileops = (() => {
+// fileops.js — the storage-facing flows: open, save, save-as, merge. These wrap the
+// runner (open/merge are registry ops) and the storage façade (FSA / download). The
+// filename is pinned on first save and never re-derived from a mutable title.
+
+const state = __m_core_state.state;
+const markDirty = __m_core_state.markDirty;
+const dispatch = __m_core_runner.dispatch;
+const emit = __m_core_events.emit;
+const storage = __m_core_storage;
+const toast = __m_ui_toast.toast;
+const ensurePdfLib = __m_ui_engines_ui.ensurePdfLib;
+
+async function openPdf() {
+  try {
+    const picked = storage.hasFSA ? await storage.pickAndReadPdf() : await storage.readPdfViaInput();
+    if (!picked) return;
+    await ensurePdfLib();
+    await dispatch('open.bytes', { bytes: picked.bytes });
+    state.session.fileName = picked.name;
+    state.session.fileHandle = picked.handle || null;
+    state.session.source = picked.handle ? 'fsa' : 'picker';
+    if (picked.handle) storage.rememberHandle(picked.handle, picked.name).catch(() => {});
+    emit('session:changed', null);
+    toast(`Opened ${picked.name}`, 'ok');
+  } catch (err) {
+    if (err?.name !== 'AbortError') emit('error', { message: 'Could not open PDF', detail: err.message });
+  }
+}
+
+async function openBytes(bytes, name = 'document.pdf', handle = null) {
+  await ensurePdfLib();
+  await dispatch('open.bytes', { bytes });
+  state.session.fileName = name;
+  state.session.fileHandle = handle;
+  emit('session:changed', null);
+}
+
+async function newBlank() {
+  await ensurePdfLib();
+  await dispatch('open.blank', { pages: 1 });
+  state.session.fileName = 'untitled.pdf';
+  state.session.fileHandle = null;
+  emit('session:changed', null);
+}
+
+async function savePdf() {
+  if (!state.doc) return;
+  const handle = state.session.fileHandle;
+  if (!handle) return savePdfAs();
+  try {
+    if (!await storage.ensurePermission(handle, 'readwrite')) return savePdfAs();
+    const bytes = await state.doc.toBytes();
+    await storage.saveToHandle(handle, bytes);
+    markDirty(false);
+    toast(`Saved ${state.session.fileName || 'document'}`, 'ok');
+  } catch (err) {
+    emit('error', { message: 'Save failed', detail: err.message });
+  }
+}
+
+async function savePdfAs() {
+  if (!state.doc) return;
+  try {
+    const bytes = await state.doc.toBytes();
+    const name = state.session.fileName || 'document.pdf';
+    const handle = await storage.saveAs(bytes, name);
+    if (handle) {
+      state.session.fileHandle = handle;
+      state.session.fileName = handle.name; // pin
+      storage.rememberHandle(handle, handle.name).catch(() => {});
+      emit('session:changed', null);
+    }
+    markDirty(false);
+    toast('Saved', 'ok');
+  } catch (err) {
+    if (err?.name !== 'AbortError') emit('error', { message: 'Save failed', detail: err.message });
+  }
+}
+
+async function mergePdf() {
+  if (!state.doc) return;
+  try {
+    const picked = storage.hasFSA ? await storage.pickAndReadPdf() : await storage.readPdfViaInput();
+    if (!picked) return;
+    await dispatch('pages.merge', { bytes: picked.bytes, position: 'end' }, { source: 'ui' });
+    toast(`Merged ${picked.name}`, 'ok');
+  } catch (err) {
+    if (err?.name !== 'AbortError') emit('error', { message: 'Merge failed', detail: err.message });
+  }
+}
+
+return { openPdf, openBytes, newBlank, savePdf, savePdfAs, mergePdf };
+})();
+
+/* ui/settings.js */
+const __m_ui_settings = (() => {
+// settings.js — the settings modal. Theme, default view mode, and the developer
+// "agent face" toggle (off by default; this is the only place window.sheaf turns on).
+// Plus the honest privacy line and pinned engine versions.
+
+const el = __m_ui_dom.el;
+const openModal = __m_ui_modal.openModal;
+const state = __m_core_state.state;
+const savePrefs = __m_core_state.savePrefs;
+const setAgentFace = __m_core_agent.setAgentFace;
+const setFitMode = __m_ui_viewer.setFitMode;
+const MANIFEST = __m_core_engines.MANIFEST;
+const emit = __m_core_events.emit;
+
+function openSettings() {
+  const version = document.getElementById('app').dataset.version || '';
+  const content = () => el('div', { style: 'display:flex;flex-direction:column;gap:16px' }, [
+    settingRow('Theme', 'Dark or light. High-contrast dark is the default.',
+      select(['dark', 'light'], document.documentElement.getAttribute('data-theme') || 'dark', (v) => {
+        document.documentElement.setAttribute('data-theme', v); savePrefs();
+        const tb = document.getElementById('btn-theme'); if (tb) emit('toast', { message: '' }); // no-op; theme icon refreshes on next render
+      })),
+
+    settingRow('Default view', 'How pages stack in the viewport.',
+      select(['continuous', 'paginated'], state.view.mode, (v) => { state.view.mode = v; savePrefs(); })),
+
+    settingRow('Fit', 'How pages are scaled to the window.',
+      select(['width', 'page', 'actual'], state.view.fitMode === 'custom' ? 'width' : state.view.fitMode, (v) => setFitMode(v))),
+
+    el('hr', { style: 'border:none;border-top:1px solid var(--panel-border);margin:2px 0' }),
+
+    settingRow('Agent face', 'Expose window.sheaf + URL mode so scripts and the Bench conductor can drive Sheaf. Off by default — a link can never run ops on your file unless you enable this.',
+      toggle(state.dev.agentFace, (v) => { setAgentFace(v); emit('toast', { message: v ? 'Agent face enabled (window.sheaf)' : 'Agent face disabled', level: 'ok' }); })),
+
+    el('div', { style: 'font-size:12px;color:var(--fg-faint);line-height:1.6' }, [
+      el('div', { html: '<b style="color:var(--ok)">Private by design.</b> Your PDF never leaves this device. No account, no upload, no telemetry. Nothing is sent anywhere.' }),
+      el('div', { style: 'margin-top:6px', text: `Sheaf v${version} · pdf-lib ${MANIFEST['pdf-lib'].version} · pdfjs ${MANIFEST.pdfjs.version} — all engines vendored same-origin and SHA-256 verified.` }),
+    ]),
+  ]);
+
+  return openModal({ title: 'Settings', content, actions: [{ label: 'Done', kind: 'primary', value: true }] });
+}
+
+function settingRow(title, desc, control) {
+  return el('div.setting-row', {}, [
+    el('div', {}, [el('div', { text: title, style: 'font-size:14px' }), el('div.desc', { text: desc })]),
+    el('div', { style: 'flex:0 0 auto' }, [control]),
+  ]);
+}
+
+function select(options, value, onChange) {
+  return el('select', { onChange: (e) => onChange(e.target.value) },
+    options.map(o => el('option', { value: o, selected: o === value }, [o[0].toUpperCase() + o.slice(1)])));
+}
+
+function toggle(value, onChange) {
+  const cb = el('input', { type: 'checkbox', checked: value, onChange: (e) => onChange(e.target.checked), style: 'width:18px;height:18px' });
+  return el('label', { style: 'display:inline-flex;align-items:center;gap:6px;cursor:pointer' }, [cb]);
+}
+
+return { openSettings };
+})();
+
+/* ui/help.js */
+const __m_ui_help = (() => {
+// help.js — the `?` panel. What Sheaf is, the keyboard grammar (read from the
+// registered grammar so it never drifts from reality), and the privacy posture.
+
+const el = __m_ui_dom.el;
+const openModal = __m_ui_modal.openModal;
+const keyboard = __m_core_keyboard.keyboard;
+
+function openHelp() {
+  const content = () => el('div', { style: 'display:flex;flex-direction:column;gap:14px' }, [
+    el('p', { html: '<b>Sheaf</b> is a browser-native PDF editor. Your document is opened straight off your disk, edited entirely in this tab, and saved back — <b>nothing is uploaded</b>. Merge, reorder, rotate, delete pages, edit metadata, and more.' }),
+    el('div', {}, [
+      el('div', { text: 'Keyboard', style: 'font-size:13px;color:var(--fg-muted);margin-bottom:6px' }),
+      el('div', { style: 'display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:13px' },
+        shortcutRows().flatMap(([k, d]) => [
+          el('kbd', { text: k, style: 'font-family:var(--mono);background:var(--bg-sunken);padding:2px 7px;border-radius:5px;justify-self:start' }),
+          el('span', { text: d, style: 'color:var(--fg-muted)' }),
+        ])),
+    ]),
+    el('p', { style: 'font-size:12px;color:var(--fg-faint)', html: 'Tip: select pages in the left rail (click, ⇧-click for a range, ⌘/Ctrl-click to add) — page operations act on the selection. Drag a thumbnail to reorder.' }),
+  ]);
+  return openModal({ title: 'Help', content, actions: [{ label: 'Close', kind: 'primary', value: true }] });
+}
+
+// Prefer the live grammar; fall back to a static list if nothing registered yet.
+function shortcutRows() {
+  const live = keyboard.list().filter(b => b.label).map(b => [prettyCombo(b.combo), b.label]);
+  if (live.length) return live;
+  return [
+    ['⌘O', 'Open'], ['⌘S', 'Save'], ['⌘⇧S', 'Save as'],
+    ['⌘Z', 'Undo'], ['⌘⇧Z', 'Redo'],
+    ['+ / -', 'Zoom in / out'], ['0', 'Fit width'],
+    ['?', 'Help'], ['Esc', 'Close dialog'],
+  ];
+}
+
+function prettyCombo(combo) {
+  const mac = navigator.platform.toLowerCase().includes('mac');
+  return combo.split('+').map(p => ({
+    mod: mac ? '⌘' : 'Ctrl', shift: '⇧', alt: mac ? '⌥' : 'Alt',
+    arrowup: '↑', arrowdown: '↓', arrowleft: '←', arrowright: '→', escape: 'Esc',
+  }[p] || p.toUpperCase())).join(mac ? '' : '+');
+}
+
+return { openHelp };
+})();
+
+/* ui/toolbar.js */
+const __m_ui_toolbar = (() => {
+// toolbar.js — the top chrome. Buttons dispatch through the runner (the same door
+// the agent face uses). Page ops act on the selected pages, or the current page when
+// nothing is selected. Buttons that need a document disable when none is open.
+
+const el = __m_ui_dom.el;
+const clear = __m_ui_dom.clear;
+const icon = __m_ui_icons.icon;
+const state = __m_core_state.state;
+const on = __m_core_events.on;
+const emit = __m_core_events.emit;
+const dispatch = __m_core_runner.dispatch;
+const undo = __m_core_runner.undo;
+const redo = __m_core_runner.redo;
+const historyStatus = __m_core_runner.historyStatus;
+const savePrefs = __m_core_state.savePrefs;
+const selectedPages = __m_ui_thumbs.selectedPages;
+const confirmModal = __m_ui_modal.confirmModal;
+const formModal = __m_ui_modal.formModal;
+const toast = __m_ui_toast.toast;
+const openPdf = __m_ui_fileops.openPdf;
+const newBlank = __m_ui_fileops.newBlank;
+const savePdf = __m_ui_fileops.savePdf;
+const savePdfAs = __m_ui_fileops.savePdfAs;
+const mergePdf = __m_ui_fileops.mergePdf;
+const openSettings = __m_ui_settings.openSettings;
+const openHelp = __m_ui_help.openHelp;
+
+let bar = null;
+const need = [];   // buttons needing a document
+
+function targetPages() {
+  const sel = selectedPages();
+  return sel.length ? sel : [state.view.pageIndex];
+}
+
+function btn(iconName, label, onClick, { needsDoc = false, danger = false, id = '' } = {}) {
+  const b = el('button', {
+    class: `btn ${danger ? 'danger' : ''} ${label ? '' : 'icon'}`,
+    title: label || iconName, 'aria-label': label || iconName, onClick, id,
+  }, [el('span', { html: icon(iconName) }), label ? el('span.label', { text: label }) : null].filter(Boolean));
+  if (needsDoc) need.push(b);
+  return b;
+}
+
+function initToolbar() {
+  bar = document.getElementById('toolbar');
+  const v = document.getElementById('app').dataset.version || '';
+  render(v);
+
+  on('doc:loaded', refresh);
+  on('doc:closed', refresh);
+  on('session:changed', refresh);
+  on('history:changed', refresh);
+  on('dirty:changed', refresh);
+  refresh();
+}
+
+function render(version) {
+  clear(bar).append(
+    el('div.brand', {}, [el('b', { text: 'Sheaf' }), el('span.ver', { text: `v${version}` })]),
+
+    el('div.group', {}, [
+      btn('open', 'Open', openPdf),
+      btn('new', '', newBlank, { id: 'btn-new' }),
+    ]),
+    el('div.sep'),
+    el('div.group', {}, [
+      btn('save', 'Save', savePdf, { needsDoc: true }),
+      btn('saveas', '', savePdfAs, { needsDoc: true }),
+    ]),
+    el('div.sep'),
+    el('div.group', {}, [
+      (undoBtn = btn('undo', '', () => undo(), { needsDoc: true })),
+      (redoBtn = btn('redo', '', () => redo(), { needsDoc: true })),
+    ]),
+    el('div.sep'),
+    el('div.group', {}, [
+      btn('rotate', '', () => dispatch('pages.rotate', { pages: targetPages(), angle: 90 }), { needsDoc: true }),
+      btn('trash', '', onDelete, { needsDoc: true, danger: true }),
+      btn('copy', '', () => dispatch('pages.duplicate', { pages: targetPages() }), { needsDoc: true }),
+      btn('insert', '', onInsert, { needsDoc: true }),
+      btn('scale', '', onScale, { needsDoc: true }),
+      btn('merge', '', mergePdf, { needsDoc: true }),
+      btn('info', '', onMetadata, { needsDoc: true }),
+    ]),
+
+    el('div.spacer'),
+    (fname = el('div.fname', { text: '' })),
+    el('div.sep'),
+    el('div.group', {}, [
+      btn(document.documentElement.getAttribute('data-theme') === 'light' ? 'moon' : 'sun', '', toggleTheme, { id: 'btn-theme' }),
+      btn('settings', '', openSettings),
+      btn('help', '', openHelp),
+    ]),
+  );
+}
+
+let undoBtn, redoBtn, fname;
+
+function refresh() {
+  const open = !!state.doc;
+  for (const b of need) b.disabled = !open;
+  if (undoBtn && redoBtn) { const h = historyStatus(); undoBtn.disabled = !h.canUndo; redoBtn.disabled = !h.canRedo; }
+  if (fname) {
+    const name = state.session.fileName;
+    clear(fname);
+    if (name) { fname.append(name); if (state.dirty) fname.append(el('span.dot', { text: ' ●', title: 'Unsaved changes' })); }
+  }
+}
+
+async function onDelete() {
+  const pages = targetPages();
+  if (pages.length >= state.doc.pageCount()) return toast('Cannot delete every page', 'warn');
+  const ok = await confirmModal(`Delete ${pages.length} page${pages.length > 1 ? 's' : ''}? This removes them from the document.`, { title: 'Delete pages', okLabel: 'Delete', danger: true });
+  if (ok) dispatch('pages.delete', { pages });
+}
+
+async function onInsert() {
+  const at = Math.min(state.view.pageIndex + 1, state.doc.pageCount());
+  await dispatch('pages.insertBlank', { at });
+  toast(`Inserted a blank page at ${at + 1}`, 'ok');
+}
+
+async function onScale() {
+  const v = await formModal('Scale pages', [
+    { name: 'factor', label: 'Scale factor (1 = unchanged)', type: 'number', value: 1, min: 0.05, max: 20 },
+  ]);
+  if (v && v.factor) dispatch('pages.scale', { pages: targetPages(), factor: v.factor });
+}
+
+async function onMetadata() {
+  const m = state.doc.getMetadata();
+  const v = await formModal('Edit metadata', [
+    { name: 'title', label: 'Title', value: m.title || '' },
+    { name: 'author', label: 'Author', value: m.author || '' },
+    { name: 'subject', label: 'Subject', value: m.subject || '' },
+    { name: 'keywords', label: 'Keywords (comma-separated)', value: m.keywords || '' },
+  ]);
+  if (v) dispatch('metadata.set', v);
+}
+
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  const next = cur === 'light' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', next);
+  savePrefs();
+  const tb = document.getElementById('btn-theme');
+  if (tb) tb.querySelector('span').innerHTML = icon(next === 'light' ? 'moon' : 'sun');
+}
+
+return { initToolbar };
+})();
+
+/* ui/statusbar.js */
+const __m_ui_statusbar = (() => {
+// statusbar.js — page position + zoom. Compact, bottom of the shell.
+
+const el = __m_ui_dom.el;
+const clear = __m_ui_dom.clear;
+const icon = __m_ui_icons.icon;
+const state = __m_core_state.state;
+const on = __m_core_events.on;
+const zoomBy = __m_ui_viewer.zoomBy;
+const setFitMode = __m_ui_viewer.setFitMode;
+const currentScalePct = __m_ui_viewer.currentScalePct;
+
+let bar = null, pageLabel = null, zoomLabel = null, selLabel = null;
+
+function initStatusbar() {
+  bar = document.getElementById('statusbar');
+  clear(bar).append(
+    (pageLabel = el('span', { text: '' })),
+    (selLabel = el('span', { text: '', style: 'color:var(--fg-faint)' })),
+    el('span.spacer'),
+    el('div.zoom', {}, [
+      el('button', { title: 'Zoom out', 'aria-label': 'Zoom out', html: icon('zoomout'), onClick: () => zoomBy(1 / 1.2) }),
+      (zoomLabel = el('button', { title: 'Fit width', 'aria-label': 'Fit width', text: '100%', onClick: () => setFitMode('width') })),
+      el('button', { title: 'Zoom in', 'aria-label': 'Zoom in', html: icon('zoomin'), onClick: () => zoomBy(1.2) }),
+    ]),
+  );
+  on('rendoc:ready', update);
+  on('rendoc:cleared', update);
+  on('page:current', update);
+  on('view:changed', update);
+  on('viewer:rendered', update);
+  on('selection:count', ({ count }) => { if (selLabel) selLabel.textContent = count ? ` · ${count} selected` : ''; });
+  update();
+}
+
+function update() {
+  if (!bar) return;
+  const n = state.doc ? state.doc.pageCount() : 0;
+  pageLabel.textContent = n ? `Page ${Math.min(state.view.pageIndex + 1, n)} of ${n}` : 'No document';
+  if (zoomLabel) zoomLabel.textContent = n ? `${currentScalePct()}%` : '—';
+}
+
+return { initStatusbar };
+})();
+
+/* ui/welcome.js */
+const __m_ui_welcome = (() => {
+// welcome.js — the empty state. A drag-drop target, Open / New actions, recent
+// files (re-opened via stored FSA handles after a permission re-grant), and the
+// privacy line. Shown whenever no document is open; the `?` help stays reachable.
+
+const el = __m_ui_dom.el;
+const clear = __m_ui_dom.clear;
+const icon = __m_ui_icons.icon;
+const on = __m_core_events.on;
+const emit = __m_core_events.emit;
+const state = __m_core_state.state;
+const storage = __m_core_storage;
+const openPdf = __m_ui_fileops.openPdf;
+const newBlank = __m_ui_fileops.newBlank;
+const openBytes = __m_ui_fileops.openBytes;
+const ensurePdfLib = __m_ui_engines_ui.ensurePdfLib;
+const toast = __m_ui_toast.toast;
+
+let welcome = null, body = null;
+
+function initWelcome() {
+  welcome = document.getElementById('welcome');
+  body = document.getElementById('body');
+  render();
+  on('doc:loaded', updateVisibility);
+  on('doc:closed', () => { updateVisibility(); render(); });
+  updateVisibility();
+  wireGlobalDrop();
+}
+
+function updateVisibility() {
+  const open = !!state.doc;
+  welcome.classList.toggle('hidden', open);
+  body.classList.toggle('hidden', !open);
+}
+
+async function render() {
+  const drop = el('div.drop', {}, [
+    el('div', { html: icon('pages'), style: 'width:46px;height:46px;margin:0 auto;color:var(--fg-faint)' }),
+    el('h1', { text: 'Open a PDF to start' }),
+    el('p', { text: 'Drag a PDF here, or open one from your disk. It is edited entirely in this tab and saved back to your file — nothing is uploaded.' }),
+    el('div.actions', {}, [
+      el('button', { class: 'btn primary', onClick: openPdf }, [el('span', { html: icon('open') }), el('span.label', { text: 'Open PDF' })]),
+      el('button', { class: 'btn', onClick: newBlank }, [el('span', { html: icon('new') }), el('span.label', { text: 'New blank' })]),
+    ]),
+    el('div.privacy', { html: `${icon('moon')} <span>No account · no upload · no telemetry · works offline</span>`, style: 'justify-content:center;margin-top:4px' }),
+  ]);
+  clear(welcome).append(drop);
+  renderRecent();
+}
+
+async function renderRecent() {
+  try {
+    const recents = await storage.recentHandles();
+    if (!recents.length) return;
+    const list = el('div', { style: 'margin-top:8px;font-size:13px' }, [
+      el('div', { text: 'Recent', style: 'color:var(--fg-faint);margin-bottom:6px' }),
+      el('div', { style: 'display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:520px' },
+        recents.slice(0, 6).map(r => el('button', {
+          class: 'btn', style: 'font-size:12px',
+          title: 'Re-open (will ask permission)',
+          onClick: () => reopen(r),
+        }, [r.name]))),
+    ]);
+    welcome.append(list);
+  } catch {}
+}
+
+async function reopen(rec) {
+  try {
+    if (!await storage.ensurePermission(rec.handle, 'read')) return toast('Permission denied', 'warn');
+    await ensurePdfLib();
+    const file = await rec.handle.getFile();
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    await openBytes(bytes, file.name, rec.handle);
+    toast(`Opened ${file.name}`, 'ok');
+  } catch (err) {
+    emit('error', { message: 'Could not re-open', detail: err.message });
+  }
+}
+
+function wireGlobalDrop() {
+  const app = document.getElementById('app');
+  const dropEl = () => welcome.querySelector('.drop');
+  app.addEventListener('dragover', (e) => { e.preventDefault(); dropEl()?.classList.add('over'); });
+  app.addEventListener('dragleave', (e) => { if (e.target === app) dropEl()?.classList.remove('over'); });
+  app.addEventListener('drop', async (e) => {
+    e.preventDefault(); dropEl()?.classList.remove('over');
+    const file = [...(e.dataTransfer?.files || [])].find(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+    if (!file) return;
+    try {
+      await ensurePdfLib();
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      await openBytes(bytes, file.name, null);
+      toast(`Opened ${file.name}`, 'ok');
+    } catch (err) { emit('error', { message: 'Could not open dropped file', detail: err.message }); }
+  });
+}
+
+return { initWelcome };
+})();
+
+/* app.js */
+const __m_app = (() => {
+// app.js — bootstrap. Probe → prefs → error net → register ops → init UI → wire the
+// keyboard grammar + agent face → URL mode. The deterministic core is already proven
+// headlessly (test/m0-replay.mjs); this wires the human face on top of it.
+
+const setEnginesBase = __m_core_engines.setEnginesBase;
+const loadPrefs = __m_core_state.loadPrefs;
+const state = __m_core_state.state;
+const on = __m_core_events.on;
+const registerOps = __m_ops_index.registerOps;
+const keyboard = __m_core_keyboard.keyboard;
+const undo = __m_core_runner.undo;
+const redo = __m_core_runner.redo;
+const refreshAgentFace = __m_core_agent.refreshAgentFace;
+const handleUrlMode = __m_core_agent.handleUrlMode;
+
+const installErrorNet = __m_ui_toast.installErrorNet;
+const initToolbar = __m_ui_toolbar.initToolbar;
+const initStatusbar = __m_ui_statusbar.initStatusbar;
+const initRenderDoc = __m_ui_rendoc.initRenderDoc;
+const initViewer = __m_ui_viewer.initViewer;
+const zoomBy = __m_ui_viewer.zoomBy;
+const setFitMode = __m_ui_viewer.setFitMode;
+const scrollToPage = __m_ui_viewer.scrollToPage;
+const initThumbs = __m_ui_thumbs.initThumbs;
+const initWelcome = __m_ui_welcome.initWelcome;
+const openPdf = __m_ui_fileops.openPdf;
+const savePdf = __m_ui_fileops.savePdf;
+const savePdfAs = __m_ui_fileops.savePdfAs;
+const openHelp = __m_ui_help.openHelp;
+
+function probe() {
+  const ok = typeof crypto !== 'undefined' && crypto.subtle && 'indexedDB' in window;
+  if (!ok) document.getElementById('compat')?.classList.add('show');
+  return ok;
+}
+
+function wireKeyboard() {
+  let modalOpen = false;
+  on('modal:open', () => { modalOpen = true; });
+  on('modal:close', () => { modalOpen = false; });
+  keyboard.setContextResolver(() => modalOpen ? ['__modal__'] : (state.doc ? ['viewer'] : ['global']));
+
+  keyboard
+    .register('mod+o', () => openPdf(), { context: 'global', label: 'Open' })
+    .register('mod+s', () => savePdf(), { context: 'global', label: 'Save' })
+    .register('mod+shift+s', () => savePdfAs(), { context: 'global', label: 'Save as' })
+    .register('mod+z', () => undo(), { context: 'global', label: 'Undo' })
+    .register('mod+shift+z', () => redo(), { context: 'global', label: 'Redo' })
+    .register('?', () => openHelp(), { context: 'global', label: 'Help' })
+    .register('+', () => zoomBy(1.2), { context: 'viewer', label: 'Zoom in' })
+    .register('=', () => zoomBy(1.2), { context: 'viewer' })
+    .register('-', () => zoomBy(1 / 1.2), { context: 'viewer', label: 'Zoom out' })
+    .register('0', () => setFitMode('width'), { context: 'viewer', label: 'Fit width' })
+    .register('arrowdown', () => scrollToPage(Math.min(state.view.pageIndex + 1, state.doc.pageCount() - 1)), { context: 'viewer' })
+    .register('arrowup', () => scrollToPage(Math.max(state.view.pageIndex - 1, 0)), { context: 'viewer' })
+    .attach(window);
+}
+
+function wireLoadingBar() {
+  const bar = document.getElementById('loading-bar');
+  on('loading', ({ on: active }) => {
+    if (!bar) return;
+    if (active) { bar.style.width = '70%'; }
+    else { bar.style.width = '100%'; setTimeout(() => { bar.style.width = '0'; }, 220); }
+  });
+}
+
+function boot() {
+  if (!probe()) return;
+  // Engines live one level up from /src in dev; the build rewrites this to './engines'.
+  setEnginesBase('./engines');
+  loadPrefs();
+  if (!document.documentElement.getAttribute('data-theme')) document.documentElement.setAttribute('data-theme', 'dark');
+  installErrorNet();
+  wireLoadingBar();
+
+  registerOps();
+
+  initRenderDoc();
+  initViewer();
+  initThumbs();
+  initStatusbar();
+  initToolbar();
+  initWelcome();
+
+  wireKeyboard();
+  refreshAgentFace();
+  handleUrlMode();
+
+  console.log('[sheaf] ready —', document.getElementById('app').dataset.version);
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+else boot();
+
+return {  };
+})();
+</script>
+</body>
+</html>

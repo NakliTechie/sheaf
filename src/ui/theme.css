@@ -1,0 +1,83 @@
+/* theme.css — design tokens (nakli-creative-primitives convention). Every colour,
+   space, and radius is a custom property; a new theme is one [data-theme] block,
+   never a refactor. Dark is the default (high-contrast a11y per handoff §11). */
+
+:root,
+:root[data-theme="dark"] {
+  --bg:            #14161a;
+  --bg-raised:     #1c1f25;
+  --bg-sunken:     #0f1114;
+  --panel:         #1c1f25;
+  --panel-border:  #2b2f37;
+  --canvas-bg:     #0b0c0f;
+
+  --fg:            #e7e9ee;
+  --fg-muted:      #9aa1ad;
+  --fg-faint:      #6b7280;
+
+  --accent:        #5b8cff;
+  --accent-fg:     #ffffff;
+  --accent-soft:   #21304f;
+
+  --danger:        #ff5c5c;
+  --danger-soft:   #3a1f22;
+  --warn:          #ffb454;
+  --ok:            #4ec98f;
+
+  --page-shadow:   0 2px 14px rgba(0,0,0,.55);
+  --overlay:       rgba(8,9,11,.66);
+
+  --r-sm: 5px;  --r-md: 9px;  --r-lg: 14px;
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px;  --sp-4: 16px;  --sp-5: 24px;  --sp-6: 36px;
+
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  --toolbar-h: 52px;
+  --rail-w: 168px;
+  --shadow-pop: 0 10px 40px rgba(0,0,0,.5);
+}
+
+:root[data-theme="light"] {
+  --bg:            #f4f5f7;
+  --bg-raised:     #ffffff;
+  --bg-sunken:     #e9ebef;
+  --panel:         #ffffff;
+  --panel-border:  #d9dce2;
+  --canvas-bg:     #cfd3da;
+
+  --fg:            #1a1d23;
+  --fg-muted:      #5b626d;
+  --fg-faint:      #8b919c;
+
+  --accent:        #2f6bff;
+  --accent-fg:     #ffffff;
+  --accent-soft:   #dbe6ff;
+
+  --danger:        #d23b3b;
+  --danger-soft:   #fbe3e3;
+  --warn:          #b9760f;
+  --ok:            #1f9d62;
+
+  --page-shadow:   0 2px 12px rgba(20,30,50,.18);
+  --overlay:       rgba(20,24,32,.4);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0; height: 100%;
+  background: var(--bg); color: var(--fg);
+  font-family: var(--font); font-size: 14px; line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button { font-family: inherit; font-size: inherit; color: inherit; }
+
+.visually-hidden {
+  position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

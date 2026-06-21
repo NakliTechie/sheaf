@@ -33,39 +33,55 @@ export async function dispatch(id, params = {}, { source = 'ui', record = true }
   // Open ops may run with no current doc; everything else needs one.
   if (op.group !== 'open' && !state.doc) throw new Error(`No document open for "${id}"`);
 
-  const result = await op.run(state.doc, clean);
-
-  if (!op.mutates) {
-    // Artifact op — no document change, nothing recorded.
-    emit('op:artifact', { id, source });
-    return { ok: true, artifact: result?.artifact ?? null };
+  if (op.group !== 'open') {
+    // Mutating/artifact op on the current doc. runAndNormalize re-parses the result
+    // from its own bytes so getPages()/getPageCount()/metadata are always consistent
+    // (pdf-lib's getPages() cache can go stale after in-place removePage/insertPage)
+    // and so the in-memory doc, the snapshot, and what the renderer derives are the
+    // same byte representation. Costs one re-parse per op — correctness over micro-perf.
+    const r = await runAndNormalize(state.doc, op, clean);
+    if ('artifact' in r) { emit('op:artifact', { id, source }); return { ok: true, artifact: r.artifact }; }
+    state.doc = r.doc;
+    if (record) {
+      const pointer = state.history.push(id, clean);
+      state.history.saveSnapshot(pointer, r.bytes);
+      emit('history:changed', historyStatus());
+    }
+    markDirty(true);
+    emit('doc:changed', { id, source });
+    return { ok: true, doc: r.doc };
   }
 
-  const newDoc = result?.doc;
-  if (!(newDoc instanceof SheafDoc)) throw new Error(`Op "${id}" must return { doc } but did not`);
-  state.doc = newDoc;
-
-  if (op.group === 'open') {
-    // A fresh document: reset history, seed the floor with these bytes.
-    seedFloor(await newDoc.toBytes());
-    markDirty(false);
-    emit('doc:changed', { id, source, opened: true });
-    return { ok: true, doc: newDoc };
-  }
-
-  if (record) await commitOp(id, clean);
-  markDirty(true);
-  emit('doc:changed', { id, source });
-  return { ok: true, doc: newDoc };
+  // Open op: a fresh document. Reset history + view + selection, seed the floor.
+  const newDoc = result_open(await op.run(state.doc, clean), id);
+  state.doc = await newDoc;
+  seedFloor(await state.doc.toBytes());
+  state.view.pageIndex = 0;
+  state.selection = { pages: [], region: null };
+  state.activeTool = null;
+  markDirty(false);
+  emit('doc:loaded', { id, source, pageCount: state.doc.pageCount() });
+  return { ok: true, doc: state.doc };
 }
 
-async function commitOp(id, params) {
-  const pointer = state.history.push(id, params);
-  // Snapshot the serialized document at snapshot points (and the floor). Replay
-  // between snapshots re-runs only the ops since the nearest one.
-  const bytes = await state.doc.toBytes();
-  state.history.saveSnapshot(pointer, bytes);
-  emit('history:changed', historyStatus());
+// Helper: validate an open op's result is a doc.
+function result_open(result, id) {
+  const d = result?.doc;
+  if (!(d instanceof SheafDoc)) throw new Error(`Open op "${id}" must return { doc }`);
+  return d;
+}
+
+// Run an op and, if it mutates, normalize the result through its bytes. Returns
+// { doc, bytes } for mutating ops or { artifact } for artifact ops. The single place
+// ops are executed against a doc — dispatch and replay both go through it, so the live
+// path and the replay path are byte-for-byte identical.
+async function runAndNormalize(doc, op, params) {
+  const res = await op.run(doc, params);
+  if (op.mutates === false) return { artifact: res?.artifact ?? null };
+  const out = res?.doc;
+  if (!(out instanceof SheafDoc)) throw new Error(`Op "${op.id}" must return { doc } but did not`);
+  const bytes = await out.toBytes();
+  return { doc: await SheafDoc.fromBytes(bytes, { validate: false }), bytes };
 }
 
 // Rebuild the document at a target pointer from the nearest snapshot + replayed ops.
@@ -77,8 +93,7 @@ async function applyToPointer(target) {
   for (const { op, params } of ops) {
     const def = getOp(op);
     if (!def) throw new Error(`Replay hit unknown op "${op}"`);
-    const res = await def.run(doc, params);
-    doc = res.doc;
+    doc = (await runAndNormalize(doc, def, params)).doc;
   }
   state.doc = doc;
   emit('doc:changed', { replay: true });
@@ -111,8 +126,7 @@ export async function replayFromFloor() {
   let doc = await SheafDoc.fromBytes(floor.bytes, { validate: false });
   for (const { op, params } of state.history.opsUpToPointer()) {
     const def = getOp(op);
-    const res = await def.run(doc, params);
-    doc = res.doc;
+    doc = (await runAndNormalize(doc, def, params)).doc;
   }
   return doc;
 }

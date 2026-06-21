@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Sheaf — PDF editor</title>
+  <meta name="description" content="Browser-native PDF editor. One file. No account, no upload, no telemetry, no limits.">
+  <meta name="sheaf-version" content="0.1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; worker-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'">
+  <link rel="stylesheet" href="./ui/theme.css">
+  <link rel="stylesheet" href="./ui/layout.css">
+</head>
+<body>
+  <div id="loading-bar"></div>
+  <div id="app" data-version="0.1.0">
+
+    <div id="compat">
+      <h1>Sheaf needs a modern browser</h1>
+      <p>Sheaf uses the File System Access API, IndexedDB, and WebCrypto. Please use a recent Chromium browser (Chrome / Edge / Brave / Arc) for the full experience, or a current Firefox / Safari for open-and-download mode.</p>
+    </div>
+
+    <div id="toolbar" role="toolbar" aria-label="Main toolbar"></div>
+
+    <div id="welcome" role="main" aria-label="Open a PDF to get started"></div>
+
+    <div id="body" class="hidden">
+      <div id="rail" role="listbox" aria-label="Page thumbnails"></div>
+      <div id="viewport" role="application" aria-label="PDF pages" tabindex="0"></div>
+    </div>
+
+    <div id="statusbar" role="status" aria-live="polite"></div>
+  </div>
+
+  <div id="toasts" aria-live="polite" aria-atomic="false"></div>
+  <div id="modal-root" aria-live="polite"></div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
