@@ -1,0 +1,22 @@
+# Files Wrangler must NOT upload as static assets (the deploy scans the repo root).
+# The deployed site is just index.html + /engines + _headers. Everything else here is
+# either build-time (node_modules — incl. the 119 MiB workerd binary), dev source, or
+# repo metadata, and must be excluded or it trips the 25 MiB per-asset limit.
+
+node_modules
+.git
+.github
+.wrangler
+src
+test
+build
+plan
+*.log
+*.md
+.gitignore
+.assetsignore
+wrangler.jsonc
+package.json
+package-lock.json
+bun.lockb
+VERSION

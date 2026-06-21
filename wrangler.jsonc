@@ -1,0 +1,11 @@
+{
+  // Static-assets-only Worker: Sheaf is a single index.html + vendored /engines.
+  // There is NO Worker script — Cloudflare serves the assets directly, and reads the
+  // sibling _headers file for the CSP. .assetsignore keeps node_modules (and the dev
+  // source) out of the upload so nothing trips the 25 MiB per-asset limit.
+  "name": "sheaf",
+  "compatibility_date": "2026-06-21",
+  "assets": {
+    "directory": "."
+  }
+}
