@@ -3,6 +3,7 @@
 // normalizes through bytes afterward. Deterministic — no timestamps, no randomness.
 
 import { getEngine } from '../core/engines.js';
+import { winAnsiSafe } from './textsafe.js';
 
 function lib() { return getEngine('pdf-lib'); }
 
@@ -56,9 +57,10 @@ export const ops = [
       for (const i of resolvePages(doc, pages)) {
         const page = ps[i];
         const { width, height } = page.getSize();
-        const tw = font.widthOfTextAtSize(text, fontSize);
+        const safe = winAnsiSafe(text);
+        const tw = font.widthOfTextAtSize(safe, fontSize);
         // Center the rotated text roughly on the page diagonal.
-        page.drawText(text, {
+        page.drawText(safe, {
           x: width / 2 - (tw / 2) * Math.cos(Math.PI / 4),
           y: height / 2 - (tw / 2) * Math.sin(Math.PI / 4),
           size: fontSize, font, color: rgb(r, g, b), opacity, rotate: degrees(45),
@@ -86,7 +88,7 @@ export const ops = [
       const ps = doc.pdf.getPages();
       const total = ps.length;
       ps.forEach((page, idx) => {
-        const label = format.replace(/\{n\}/g, String(startAt + idx)).replace(/\{total\}/g, String(total));
+        const label = winAnsiSafe(format.replace(/\{n\}/g, String(startAt + idx)).replace(/\{total\}/g, String(total)));
         const { width, height } = page.getSize();
         const tw = font.widthOfTextAtSize(label, fontSize);
         const [x, y] = place(position, width, height, tw, fontSize);
@@ -112,7 +114,7 @@ export const ops = [
       const font = await helvetica(doc);
       const ps = doc.pdf.getPages();
       ps.forEach((page, idx) => {
-        const label = `${prefix}${String(startAt + idx).padStart(digits, '0')}`;
+        const label = winAnsiSafe(`${prefix}${String(startAt + idx).padStart(digits, '0')}`);
         const { width, height } = page.getSize();
         const tw = font.widthOfTextAtSize(label, fontSize);
         const [x, y] = place(position, width, height, tw, fontSize);
@@ -136,11 +138,12 @@ export const ops = [
       const { rgb } = lib();
       const font = await helvetica(doc);
       const [r, g, b] = hexToRgb(color, [0.27, 0.27, 0.27]);
+      const safe = winAnsiSafe(text);
       for (const page of doc.pdf.getPages()) {
         const { width, height } = page.getSize();
-        const tw = font.widthOfTextAtSize(text, fontSize);
+        const tw = font.widthOfTextAtSize(safe, fontSize);
         const [x, y] = place(position, width, height, tw, fontSize);
-        page.drawText(text, { x, y, size: fontSize, font, color: rgb(r, g, b) });
+        page.drawText(safe, { x, y, size: fontSize, font, color: rgb(r, g, b) });
       }
       return { doc };
     },

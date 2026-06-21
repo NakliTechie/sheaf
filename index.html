@@ -1162,6 +1162,51 @@ const ops = [
 return { ops };
 })();
 
+/* ops/textsafe.js */
+const __m_ops_textsafe = (() => {
+// textsafe.js — make arbitrary text safe to draw with pdf-lib's standard fonts.
+//
+// Standard fonts (Helvetica etc.) encode WinAnsi/CP1252 only, so drawText THROWS on
+// any character outside it (an arrow, a maths symbol, CJK, an emoji). For v1.0 we
+// sanitize: keep CP1252-encodable characters, map a handful of common symbols to
+// ASCII, and replace anything else with '?'. This guarantees text ops never crash on
+// real-world input. Full Unicode (non-Latin scripts) needs a vendored Unicode font +
+// fontkit — a v1.x addition; until then those characters degrade to '?', visibly, not
+// a silent failure or a crash.
+
+// Symbol → ASCII mappings for common non-CP1252 characters worth preserving meaning.
+const MAP = {
+  '→': '->', '←': '<-', '↔': '<->', '⇒': '=>', '⇐': '<=',
+  '≤': '<=', '≥': '>=', '≠': '!=', '≈': '~', '×': 'x', '÷': '/',
+  '−': '-', ' ': ' ', ' ': ' ', ' ': ' ', ' ': ' ',
+  '′': "'", '″': '"', '⁄': '/',
+};
+
+// CP1252 code points above 0xFF that the WinAnsi encoder DOES handle (smart quotes,
+// dashes, ellipsis, euro, bullet, trademark, …). Keep these as-is.
+const CP1252_EXTRA = new Set([
+  0x20AC, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160,
+  0x2039, 0x0152, 0x017D, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+  0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x017E, 0x0178,
+]);
+
+function winAnsiSafe(input) {
+  let out = '';
+  for (const ch of String(input)) {
+    if (MAP[ch] !== undefined) { out += MAP[ch]; continue; }
+    const cp = ch.codePointAt(0);
+    if (ch === '\n' || ch === '\t') { out += ch; continue; }
+    if (cp >= 0x20 && cp <= 0x7E) { out += ch; continue; }          // printable ASCII
+    if (cp >= 0xA0 && cp <= 0xFF) { out += ch; continue; }          // Latin-1 high
+    if (CP1252_EXTRA.has(cp)) { out += ch; continue; }              // CP1252 extras
+    out += '?';                                                     // visible fallback
+  }
+  return out;
+}
+
+return { winAnsiSafe };
+})();
+
 /* ops/marks.js */
 const __m_ops_marks = (() => {
 // ops/marks.js — page marks (pdf-lib): watermark, page numbers, Bates numbering,
@@ -1169,6 +1214,7 @@ const __m_ops_marks = (() => {
 // normalizes through bytes afterward. Deterministic — no timestamps, no randomness.
 
 const getEngine = __m_core_engines.getEngine;
+const winAnsiSafe = __m_ops_textsafe.winAnsiSafe;
 
 function lib() { return getEngine('pdf-lib'); }
 
@@ -1222,9 +1268,10 @@ const ops = [
       for (const i of resolvePages(doc, pages)) {
         const page = ps[i];
         const { width, height } = page.getSize();
-        const tw = font.widthOfTextAtSize(text, fontSize);
+        const safe = winAnsiSafe(text);
+        const tw = font.widthOfTextAtSize(safe, fontSize);
         // Center the rotated text roughly on the page diagonal.
-        page.drawText(text, {
+        page.drawText(safe, {
           x: width / 2 - (tw / 2) * Math.cos(Math.PI / 4),
           y: height / 2 - (tw / 2) * Math.sin(Math.PI / 4),
           size: fontSize, font, color: rgb(r, g, b), opacity, rotate: degrees(45),
@@ -1252,7 +1299,7 @@ const ops = [
       const ps = doc.pdf.getPages();
       const total = ps.length;
       ps.forEach((page, idx) => {
-        const label = format.replace(/\{n\}/g, String(startAt + idx)).replace(/\{total\}/g, String(total));
+        const label = winAnsiSafe(format.replace(/\{n\}/g, String(startAt + idx)).replace(/\{total\}/g, String(total)));
         const { width, height } = page.getSize();
         const tw = font.widthOfTextAtSize(label, fontSize);
         const [x, y] = place(position, width, height, tw, fontSize);
@@ -1278,7 +1325,7 @@ const ops = [
       const font = await helvetica(doc);
       const ps = doc.pdf.getPages();
       ps.forEach((page, idx) => {
-        const label = `${prefix}${String(startAt + idx).padStart(digits, '0')}`;
+        const label = winAnsiSafe(`${prefix}${String(startAt + idx).padStart(digits, '0')}`);
         const { width, height } = page.getSize();
         const tw = font.widthOfTextAtSize(label, fontSize);
         const [x, y] = place(position, width, height, tw, fontSize);
@@ -1302,11 +1349,12 @@ const ops = [
       const { rgb } = lib();
       const font = await helvetica(doc);
       const [r, g, b] = hexToRgb(color, [0.27, 0.27, 0.27]);
+      const safe = winAnsiSafe(text);
       for (const page of doc.pdf.getPages()) {
         const { width, height } = page.getSize();
-        const tw = font.widthOfTextAtSize(text, fontSize);
+        const tw = font.widthOfTextAtSize(safe, fontSize);
         const [x, y] = place(position, width, height, tw, fontSize);
-        page.drawText(text, { x, y, size: fontSize, font, color: rgb(r, g, b) });
+        page.drawText(safe, { x, y, size: fontSize, font, color: rgb(r, g, b) });
       }
       return { doc };
     },
@@ -1327,6 +1375,7 @@ const __m_ops_annotate = (() => {
 // objects — consistent with the deterministic, replayable substrate.
 
 const getEngine = __m_core_engines.getEngine;
+const winAnsiSafe = __m_ops_textsafe.winAnsiSafe;
 
 function lib() { return getEngine('pdf-lib'); }
 
@@ -1461,10 +1510,141 @@ const ops = [
       const page = pageOf(doc, p.page);
       const [cr, cg, cb] = hexToRgb(p.color, [0.07, 0.07, 0.07]);
       const at = ptToPdf(page, p.x, p.y);
-      const lines = String(p.text).split('\n');
+      const lines = winAnsiSafe(p.text).split('\n');
       lines.forEach((line, i) => {
         page.drawText(line, { x: at.x, y: at.y - p.fontSize * (i + 1), size: p.fontSize, font, color: rgb(cr, cg, cb) });
       });
+      return { doc };
+    },
+  },
+];
+
+return { ops };
+})();
+
+/* ops/forms.js */
+const __m_ops_forms = (() => {
+// ops/forms.js — AcroForm support (pdf-lib): detect fields, fill them, flatten.
+// detect is a content-free artifact (field names/types/values — the conductor and
+// the Forms panel read it); fill and flatten mutate the document.
+
+const getEngine = __m_core_engines.getEngine;
+
+function shortType(t) { return t.replace(/^PDF/, '').replace(/Field$/, '').toLowerCase(); }
+
+function describe(field) {
+  const type = field.constructor?.name || 'PDFField';
+  const name = field.getName();
+  const out = { name, type: shortType(type) };
+  try {
+    if (type === 'PDFTextField') out.value = field.getText() ?? '';
+    else if (type === 'PDFCheckBox') out.value = field.isChecked();
+    else if (type === 'PDFDropdown') { out.value = field.getSelected(); out.options = field.getOptions(); }
+    else if (type === 'PDFOptionList') { out.value = field.getSelected(); out.options = field.getOptions(); }
+    else if (type === 'PDFRadioGroup') { out.value = field.getSelected(); out.options = field.getOptions(); }
+  } catch { /* leave value undefined */ }
+  return out;
+}
+
+const ops = [
+  {
+    id: 'forms.detect', label: 'Detect form fields', group: 'forms', icon: 'textbox',
+    description: 'List the AcroForm fields (name, type, current value, options). Does not change the document.',
+    agentCallable: true, mutates: false,
+    params: {},
+    run(doc) {
+      const form = doc.pdf.getForm();
+      const fields = form.getFields().map(describe);
+      return { artifact: { fieldCount: fields.length, fields } };
+    },
+  },
+
+  {
+    id: 'forms.fill', label: 'Fill form', group: 'forms', icon: 'textbox',
+    description: 'Fill AcroForm fields from a { fieldName: value } map. Text → string, checkbox → bool, dropdown/radio → option string.',
+    agentCallable: true,
+    params: { values: { type: 'object', required: true } },
+    run(doc, { values }) {
+      const form = doc.pdf.getForm();
+      const errors = [];
+      for (const [name, val] of Object.entries(values)) {
+        let field;
+        try { field = form.getField(name); } catch { errors.push(`no field "${name}"`); continue; }
+        const type = field.constructor?.name;
+        try {
+          if (type === 'PDFTextField') field.setText(val == null ? '' : String(val));
+          else if (type === 'PDFCheckBox') { val ? field.check() : field.uncheck(); }
+          else if (type === 'PDFDropdown' || type === 'PDFOptionList' || type === 'PDFRadioGroup') field.select(String(val));
+          else errors.push(`unsupported field type for "${name}"`);
+        } catch (e) { errors.push(`"${name}": ${e.message}`); }
+      }
+      if (errors.length) throw new Error(`Form fill: ${errors.join('; ')}`);
+      return { doc };
+    },
+  },
+
+  {
+    id: 'forms.flatten', label: 'Flatten form', group: 'forms', icon: 'textbox',
+    description: 'Bake the form values into the page content and remove interactivity (fields become permanent).',
+    agentCallable: true,
+    params: {},
+    run(doc) {
+      doc.pdf.getForm().flatten();
+      return { doc };
+    },
+  },
+];
+
+// Re-export so the test fixture can build a form without re-importing the engine.
+
+
+return { ops, getEngine };
+})();
+
+/* ops/text.js */
+const __m_ops_text = (() => {
+// ops/text.js — text editing via whiteout-and-retype. Covers a region with an opaque
+// rectangle (default white) and optionally draws replacement text. This is the
+// pragmatic ~80% of in-place text editing; font-matched span-replace (which needs the
+// PDF.js text layer for glyph positions + font detection) is a v1.x refinement.
+//
+// Coordinates are normalized 0..1 (screen orientation), like annotations.
+
+const getEngine = __m_core_engines.getEngine;
+const winAnsiSafe = __m_ops_textsafe.winAnsiSafe;
+
+function lib() { return getEngine('pdf-lib'); }
+function hexToRgb(hex, fb) { const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || '')); if (!m) return fb; const n = parseInt(m[1], 16); return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; }
+
+const ops = [
+  {
+    id: 'text.whiteout', label: 'Whiteout & retype', group: 'text', icon: 'textbox',
+    description: 'Cover a region with an opaque rectangle (default white) and optionally draw replacement text over it.',
+    agentCallable: true,
+    params: {
+      page: { type: 'int', required: true, min: 0 },
+      x: { type: 'number', required: true }, y: { type: 'number', required: true },
+      w: { type: 'number', required: true }, h: { type: 'number', required: true },
+      fillColor: { type: 'string', default: '#ffffff' },
+      text: { type: 'string', default: '', maxLength: 2000 },
+      fontSize: { type: 'number', default: 12, min: 4, max: 200 },
+      textColor: { type: 'string', default: '#111111' },
+    },
+    async run(doc, p) {
+      const { rgb, StandardFonts } = lib();
+      const count = doc.pageCount();
+      if (p.page < 0 || p.page >= count) throw new Error(`Page ${p.page} out of range`);
+      const page = doc.pdf.getPages()[p.page];
+      const { width: W, height: H } = page.getSize();
+      const [fr, fg, fb] = hexToRgb(p.fillColor, [1, 1, 1]);
+      const rx = p.x * W, ry = H * (1 - (p.y + p.h)), rw = p.w * W, rh = p.h * H;
+      page.drawRectangle({ x: rx, y: ry, width: rw, height: rh, color: rgb(fr, fg, fb) });
+      if (p.text) {
+        const font = await doc.pdf.embedFont(StandardFonts.Helvetica);
+        const [tr, tg, tb] = hexToRgb(p.textColor, [0.07, 0.07, 0.07]);
+        // Baseline a bit above the bottom of the covered box.
+        page.drawText(winAnsiSafe(p.text), { x: rx + 2, y: ry + Math.max(2, (rh - p.fontSize) / 2), size: p.fontSize, font, color: rgb(tr, tg, tb) });
+      }
       return { doc };
     },
   },
@@ -1485,6 +1665,8 @@ const pageOps = __m_ops_pages.ops;
 const metadataOps = __m_ops_metadata.ops;
 const marksOps = __m_ops_marks.ops;
 const annotateOps = __m_ops_annotate.ops;
+const formsOps = __m_ops_forms.ops;
+const textOps = __m_ops_text.ops;
 
 function registerOps() {
   registerAll([
@@ -1493,6 +1675,8 @@ function registerOps() {
     ...metadataOps,
     ...marksOps,
     ...annotateOps,
+    ...formsOps,
+    ...textOps,
   ]);
 }
 
@@ -1998,6 +2182,8 @@ const P = {
   line:    '<path d="M5 19 19 5"/>',
   textbox: '<path d="M4 6V4h16v2M9 20h6M12 4v16"/>',
   redact:  '<rect x="3" y="9" width="18" height="6" rx="1" fill="currentColor" stroke="none"/><path d="M3 5h18M3 19h18"/>',
+  eraser:  '<path d="M7 21h13M5 13l6-6 7 7-6 6H8z"/><path d="M9 11l6 6"/>',
+  forms:   '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>',
 };
 
 function icon(name) {
@@ -2985,7 +3171,7 @@ const dispatch = __m_core_runner.dispatch;
 const el = __m_ui_dom.el;
 const formModal = __m_ui_modal.formModal;
 
-const DRAG_TOOLS = new Set(['highlight', 'rect', 'line', 'pencil']);
+const DRAG_TOOLS = new Set(['highlight', 'rect', 'line', 'pencil', 'whiteout']);
 const ALL_TOOLS = new Set([...DRAG_TOOLS, 'text']);
 
 const toolSettings = { color: '#ff3b30', highlightColor: '#ffe14d', thickness: 2 };
@@ -3063,10 +3249,10 @@ function drawPreview() {
     return;
   }
   if (!cur) return;
-  if (active === 'highlight' || active === 'rect') {
+  if (active === 'highlight' || active === 'rect' || active === 'whiteout') {
     const x = Math.min(start.x, cur.x), y = Math.min(start.y, cur.y), w = Math.abs(cur.x - start.x), h = Math.abs(cur.y - start.y);
-    const style = active === 'highlight'
-      ? `background:${toolSettings.highlightColor};opacity:.4`
+    const style = active === 'highlight' ? `background:${toolSettings.highlightColor};opacity:.4`
+      : active === 'whiteout' ? `background:#fff;border:1px dashed #999`
       : `border:2px solid ${toolSettings.color}`;
     preview.innerHTML = `<div style="position:absolute;left:${x * 100}%;top:${y * 100}%;width:${w * 100}%;height:${h * 100}%;${style}"></div>`;
   } else if (active === 'line') {
@@ -3092,10 +3278,91 @@ function onUp() {
     dispatch('annotate.line', { page, x1: start.x, y1: start.y, x2: cur.x, y2: cur.y, color: toolSettings.color, thickness: toolSettings.thickness });
   } else if (active === 'pencil') {
     if (points.length >= 2) dispatch('annotate.pencil', { page, points, color: toolSettings.color, thickness: toolSettings.thickness });
+  } else if (active === 'whiteout') {
+    if (!cur) return;
+    const x = Math.min(start.x, cur.x), y = Math.min(start.y, cur.y), w = Math.abs(cur.x - start.x), h = Math.abs(cur.y - start.y);
+    if (w < 0.005 || h < 0.005) return;
+    whiteoutRegion(page, x, y, w, h);
   }
 }
 
+async function whiteoutRegion(page, x, y, w, h) {
+  const v = await formModal('Whiteout & retype', [
+    { name: 'text', label: 'Replacement text (optional)', value: '' },
+    { name: 'fontSize', label: 'Size (pt)', type: 'number', value: 12 },
+  ]);
+  if (v) dispatch('text.whiteout', { page, x, y, w, h, text: v.text || '', fontSize: v.fontSize, textColor: toolSettings.color });
+}
+
 return { toolSettings, currentTool, setTool, initAnnotateTools };
+})();
+
+/* ui/formsdialog.js */
+const __m_ui_formsdialog = (() => {
+// formsdialog.js — the Forms panel. Detect the document's AcroForm fields, present
+// an input per field, fill them through the runner, and offer to flatten.
+
+const el = __m_ui_dom.el;
+const openModal = __m_ui_modal.openModal;
+const dispatch = __m_core_runner.dispatch;
+const toast = __m_ui_toast.toast;
+const confirmModal = __m_ui_modal.confirmModal;
+
+async function openFormsDialog() {
+  let det;
+  try { det = (await dispatch('forms.detect', {})).artifact; }
+  catch (e) { return toast('Could not read form', 'err', { detail: e.message }); }
+
+  if (!det.fieldCount) {
+    return openModal({ title: 'Forms', content: el('p', { text: 'This document has no fillable form fields.' }), actions: [{ label: 'Close', value: true }] });
+  }
+
+  const inputs = {};
+  const content = ({ close }) => el('div', { style: 'display:flex;flex-direction:column;gap:12px' }, [
+    el('div', { text: `${det.fieldCount} field${det.fieldCount > 1 ? 's' : ''}`, style: 'font-size:12px;color:var(--fg-faint)' }),
+    ...det.fields.map(f => {
+      let input;
+      if (f.type === 'checkbox') {
+        input = el('select', {}, [el('option', { value: 'false', selected: !f.value }, ['Unchecked']), el('option', { value: 'true', selected: !!f.value }, ['Checked'])]);
+      } else if ((f.type === 'dropdown' || f.type === 'optionlist' || f.type === 'radiogroup') && f.options) {
+        const sel = Array.isArray(f.value) ? f.value[0] : f.value;
+        input = el('select', {}, [el('option', { value: '' }, ['—']), ...f.options.map(o => el('option', { value: o, selected: o === sel }, [o]))]);
+      } else {
+        input = el('input', { type: 'text', value: Array.isArray(f.value) ? f.value.join(', ') : (f.value ?? '') });
+      }
+      inputs[f.name] = { input, type: f.type };
+      return el('label', {}, [el('span', { text: f.name, style: 'font-size:12px;color:var(--fg-muted)' }), input]);
+    }),
+    el('button', { class: 'btn danger', style: 'align-self:flex-start;font-size:12px', onClick: async () => { close(null); await flatten(); } }, ['Flatten form (make permanent)']),
+  ]);
+
+  const result = await openModal({
+    title: 'Fill form', content,
+    actions: [
+      { label: 'Cancel', value: null },
+      { label: 'Fill', kind: 'primary', value: () => {
+        const values = {};
+        for (const [name, { input, type }] of Object.entries(inputs)) {
+          if (type === 'checkbox') values[name] = input.value === 'true';
+          else if (input.value !== '') values[name] = input.value;
+        }
+        return values;
+      } },
+    ],
+  });
+  if (result) {
+    try { await dispatch('forms.fill', { values: result }); toast('Form filled', 'ok'); }
+    catch (e) { toast('Fill failed', 'err', { detail: e.message }); }
+  }
+}
+
+async function flatten() {
+  if (!await confirmModal('Flatten the form? Field values become permanent page content and the fields are no longer editable.', { title: 'Flatten form', okLabel: 'Flatten', danger: true })) return;
+  try { await dispatch('forms.flatten', {}); toast('Form flattened', 'ok'); }
+  catch (e) { toast('Flatten failed', 'err', { detail: e.message }); }
+}
+
+return { openFormsDialog };
 })();
 
 /* ui/toolbar.js */
@@ -3130,6 +3397,7 @@ const openMarksMenu = __m_ui_marksmenu.openMarksMenu;
 const setTool = __m_ui_annotate_tools.setTool;
 const currentTool = __m_ui_annotate_tools.currentTool;
 const toolSettings = __m_ui_annotate_tools.toolSettings;
+const openFormsDialog = __m_ui_formsdialog.openFormsDialog;
 
 let bar = null;
 const need = [];   // buttons needing a document
@@ -3209,6 +3477,7 @@ function render(version) {
       btn('scale', '', onScale, { needsDoc: true }),
       btn('merge', '', mergePdf, { needsDoc: true }),
       btn('mark', '', openMarksMenu, { needsDoc: true }),
+      btn('forms', '', openFormsDialog, { needsDoc: true }),
       btn('info', '', onMetadata, { needsDoc: true }),
     ]),
     el('div.sep'),
@@ -3219,6 +3488,7 @@ function render(version) {
       toolBtn('line', 'line', 'Line'),
       toolBtn('pencil', 'pencil', 'Draw'),
       toolBtn('textbox', 'text', 'Text'),
+      toolBtn('eraser', 'whiteout', 'Whiteout & retype'),
       el('input', { type: 'color', value: toolSettings.color, title: 'Annotation colour', class: 'color-swatch',
         onInput: (e) => { toolSettings.color = e.target.value; } }),
     ])),
@@ -3505,6 +3775,7 @@ function wireKeyboard() {
     .register('l', () => setTool('line'), { context: 'viewer', label: 'Line' })
     .register('d', () => setTool('pencil'), { context: 'viewer', label: 'Draw' })
     .register('t', () => setTool('text'), { context: 'viewer', label: 'Text box' })
+    .register('w', () => setTool('whiteout'), { context: 'viewer', label: 'Whiteout' })
     .register('escape', () => setTool(null), { context: 'viewer' })
     .attach(window);
 }

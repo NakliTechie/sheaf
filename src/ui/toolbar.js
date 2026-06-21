@@ -16,6 +16,7 @@ import { openSettings } from './settings.js';
 import { openHelp } from './help.js';
 import { openMarksMenu } from './marksmenu.js';
 import { setTool, currentTool, toolSettings } from './annotate-tools.js';
+import { openFormsDialog } from './formsdialog.js';
 
 let bar = null;
 const need = [];   // buttons needing a document
@@ -95,6 +96,7 @@ function render(version) {
       btn('scale', '', onScale, { needsDoc: true }),
       btn('merge', '', mergePdf, { needsDoc: true }),
       btn('mark', '', openMarksMenu, { needsDoc: true }),
+      btn('forms', '', openFormsDialog, { needsDoc: true }),
       btn('info', '', onMetadata, { needsDoc: true }),
     ]),
     el('div.sep'),
@@ -105,6 +107,7 @@ function render(version) {
       toolBtn('line', 'line', 'Line'),
       toolBtn('pencil', 'pencil', 'Draw'),
       toolBtn('textbox', 'text', 'Text'),
+      toolBtn('eraser', 'whiteout', 'Whiteout & retype'),
       el('input', { type: 'color', value: toolSettings.color, title: 'Annotation colour', class: 'color-swatch',
         onInput: (e) => { toolSettings.color = e.target.value; } }),
     ])),

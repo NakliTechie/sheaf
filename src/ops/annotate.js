@@ -7,6 +7,7 @@
 // objects — consistent with the deterministic, replayable substrate.
 
 import { getEngine } from '../core/engines.js';
+import { winAnsiSafe } from './textsafe.js';
 
 function lib() { return getEngine('pdf-lib'); }
 
@@ -141,7 +142,7 @@ export const ops = [
       const page = pageOf(doc, p.page);
       const [cr, cg, cb] = hexToRgb(p.color, [0.07, 0.07, 0.07]);
       const at = ptToPdf(page, p.x, p.y);
-      const lines = String(p.text).split('\n');
+      const lines = winAnsiSafe(p.text).split('\n');
       lines.forEach((line, i) => {
         page.drawText(line, { x: at.x, y: at.y - p.fontSize * (i + 1), size: p.fontSize, font, color: rgb(cr, cg, cb) });
       });

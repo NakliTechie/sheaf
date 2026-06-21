@@ -31,6 +31,8 @@ const P = {
   line:    '<path d="M5 19 19 5"/>',
   textbox: '<path d="M4 6V4h16v2M9 20h6M12 4v16"/>',
   redact:  '<rect x="3" y="9" width="18" height="6" rx="1" fill="currentColor" stroke="none"/><path d="M3 5h18M3 19h18"/>',
+  eraser:  '<path d="M7 21h13M5 13l6-6 7 7-6 6H8z"/><path d="M9 11l6 6"/>',
+  forms:   '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>',
 };
 
 export function icon(name) {

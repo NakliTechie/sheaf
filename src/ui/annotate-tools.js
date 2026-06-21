@@ -9,7 +9,7 @@ import { dispatch } from '../core/runner.js';
 import { el } from './dom.js';
 import { formModal } from './modal.js';
 
-const DRAG_TOOLS = new Set(['highlight', 'rect', 'line', 'pencil']);
+const DRAG_TOOLS = new Set(['highlight', 'rect', 'line', 'pencil', 'whiteout']);
 const ALL_TOOLS = new Set([...DRAG_TOOLS, 'text']);
 
 export const toolSettings = { color: '#ff3b30', highlightColor: '#ffe14d', thickness: 2 };
@@ -87,10 +87,10 @@ function drawPreview() {
     return;
   }
   if (!cur) return;
-  if (active === 'highlight' || active === 'rect') {
+  if (active === 'highlight' || active === 'rect' || active === 'whiteout') {
     const x = Math.min(start.x, cur.x), y = Math.min(start.y, cur.y), w = Math.abs(cur.x - start.x), h = Math.abs(cur.y - start.y);
-    const style = active === 'highlight'
-      ? `background:${toolSettings.highlightColor};opacity:.4`
+    const style = active === 'highlight' ? `background:${toolSettings.highlightColor};opacity:.4`
+      : active === 'whiteout' ? `background:#fff;border:1px dashed #999`
       : `border:2px solid ${toolSettings.color}`;
     preview.innerHTML = `<div style="position:absolute;left:${x * 100}%;top:${y * 100}%;width:${w * 100}%;height:${h * 100}%;${style}"></div>`;
   } else if (active === 'line') {
@@ -116,5 +116,18 @@ function onUp() {
     dispatch('annotate.line', { page, x1: start.x, y1: start.y, x2: cur.x, y2: cur.y, color: toolSettings.color, thickness: toolSettings.thickness });
   } else if (active === 'pencil') {
     if (points.length >= 2) dispatch('annotate.pencil', { page, points, color: toolSettings.color, thickness: toolSettings.thickness });
+  } else if (active === 'whiteout') {
+    if (!cur) return;
+    const x = Math.min(start.x, cur.x), y = Math.min(start.y, cur.y), w = Math.abs(cur.x - start.x), h = Math.abs(cur.y - start.y);
+    if (w < 0.005 || h < 0.005) return;
+    whiteoutRegion(page, x, y, w, h);
   }
+}
+
+async function whiteoutRegion(page, x, y, w, h) {
+  const v = await formModal('Whiteout & retype', [
+    { name: 'text', label: 'Replacement text (optional)', value: '' },
+    { name: 'fontSize', label: 'Size (pt)', type: 'number', value: 12 },
+  ]);
+  if (v) dispatch('text.whiteout', { page, x, y, w, h, text: v.text || '', fontSize: v.fontSize, textColor: toolSettings.color });
 }

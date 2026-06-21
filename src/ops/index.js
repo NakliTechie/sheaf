@@ -8,6 +8,8 @@ import { ops as pageOps } from './pages.js';
 import { ops as metadataOps } from './metadata.js';
 import { ops as marksOps } from './marks.js';
 import { ops as annotateOps } from './annotate.js';
+import { ops as formsOps } from './forms.js';
+import { ops as textOps } from './text.js';
 
 export function registerOps() {
   registerAll([
@@ -16,5 +18,7 @@ export function registerOps() {
     ...metadataOps,
     ...marksOps,
     ...annotateOps,
+    ...formsOps,
+    ...textOps,
   ]);
 }
