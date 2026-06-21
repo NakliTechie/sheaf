@@ -1,0 +1,13 @@
+{
+  "name": "sheaf",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Single-HTML-file browser-native PDF editor. Bench suite, tool 1 of 5.",
+  "scripts": {
+    "test": "node test/m0-replay.mjs",
+    "build": "node build/inline.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

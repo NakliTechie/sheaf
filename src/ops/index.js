@@ -1,0 +1,16 @@
+// ops/index.js — the one place ops register into the registry. Importing a new op
+// module and adding it here is the entire wiring; the UI, agent face, and conductor
+// all pick it up automatically because they read the registry, not this file.
+
+import { registerAll } from '../core/registry.js';
+import { ops as openOps } from './open.js';
+import { ops as pageOps } from './pages.js';
+import { ops as metadataOps } from './metadata.js';
+
+export function registerOps() {
+  registerAll([
+    ...openOps,
+    ...pageOps,
+    ...metadataOps,
+  ]);
+}
