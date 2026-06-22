@@ -10,14 +10,20 @@
   padding: 0 var(--sp-3);
   background: var(--bg-raised); border-bottom: 1px solid var(--panel-border);
   user-select: none;
+  /* Never let the toolbar's intrinsic width push #app wider than the viewport:
+     min-width:0 lets the flex item shrink to the column width, overflow:hidden clips
+     any transient spill. Reachability is handled in JS — toolbar.js folds the
+     lower-priority page ops into a "More" menu (#btn-more) before they'd be clipped,
+     so #app never scrolls horizontally and the rail + right group stay in frame. */
+  min-width: 0; overflow: hidden;
 }
 #toolbar .brand { display: flex; align-items: baseline; gap: 6px; margin-right: var(--sp-3); }
 #toolbar .brand b { font-size: 16px; letter-spacing: .3px; }
 #toolbar .brand .ver { font-size: 11px; color: var(--fg-faint); }
 #toolbar .group { display: flex; align-items: center; gap: 4px; }
 #toolbar .sep { width: 1px; height: 24px; background: var(--panel-border); margin: 0 var(--sp-1); }
-#toolbar .spacer { flex: 1; }
-#toolbar .fname { color: var(--fg-muted); font-size: 12px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#toolbar .spacer { flex: 1; min-width: 0; }
+#toolbar .fname { color: var(--fg-muted); font-size: 12px; min-width: 0; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #toolbar .fname .dot { color: var(--warn); }
 
 .btn {
@@ -36,6 +42,11 @@
 .btn .label { font-size: 13px; }
 .btn.tool.active { background: var(--accent); color: var(--accent-fg); }
 .color-swatch { width: 28px; height: 28px; padding: 0; border: 1px solid var(--panel-border); border-radius: var(--r-sm); background: none; cursor: pointer; }
+
+/* Overflow "More" menu — the page ops folded out of the toolbar, as a vertical list. */
+.menu-list { display: flex; flex-direction: column; gap: 4px; min-width: 240px; }
+.menu-list .menu-item { justify-content: flex-start; width: 100%; height: 40px; padding: 0 12px; gap: 10px; }
+.menu-list .menu-item .label { font-size: 14px; }
 
 /* Annotation drawing: crosshair over pages, live preview overlay. */
 #viewport.tool-active .page-wrap { cursor: crosshair; }

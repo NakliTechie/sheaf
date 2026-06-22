@@ -111,14 +111,20 @@ button { font-family: inherit; font-size: inherit; color: inherit; }
   padding: 0 var(--sp-3);
   background: var(--bg-raised); border-bottom: 1px solid var(--panel-border);
   user-select: none;
+  /* Never let the toolbar's intrinsic width push #app wider than the viewport:
+     min-width:0 lets the flex item shrink to the column width, overflow:hidden clips
+     any transient spill. Reachability is handled in JS — toolbar.js folds the
+     lower-priority page ops into a "More" menu (#btn-more) before they'd be clipped,
+     so #app never scrolls horizontally and the rail + right group stay in frame. */
+  min-width: 0; overflow: hidden;
 }
 #toolbar .brand { display: flex; align-items: baseline; gap: 6px; margin-right: var(--sp-3); }
 #toolbar .brand b { font-size: 16px; letter-spacing: .3px; }
 #toolbar .brand .ver { font-size: 11px; color: var(--fg-faint); }
 #toolbar .group { display: flex; align-items: center; gap: 4px; }
 #toolbar .sep { width: 1px; height: 24px; background: var(--panel-border); margin: 0 var(--sp-1); }
-#toolbar .spacer { flex: 1; }
-#toolbar .fname { color: var(--fg-muted); font-size: 12px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#toolbar .spacer { flex: 1; min-width: 0; }
+#toolbar .fname { color: var(--fg-muted); font-size: 12px; min-width: 0; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #toolbar .fname .dot { color: var(--warn); }
 
 .btn {
@@ -137,6 +143,11 @@ button { font-family: inherit; font-size: inherit; color: inherit; }
 .btn .label { font-size: 13px; }
 .btn.tool.active { background: var(--accent); color: var(--accent-fg); }
 .color-swatch { width: 28px; height: 28px; padding: 0; border: 1px solid var(--panel-border); border-radius: var(--r-sm); background: none; cursor: pointer; }
+
+/* Overflow "More" menu — the page ops folded out of the toolbar, as a vertical list. */
+.menu-list { display: flex; flex-direction: column; gap: 4px; min-width: 240px; }
+.menu-list .menu-item { justify-content: flex-start; width: 100%; height: 40px; padding: 0 12px; gap: 10px; }
+.menu-list .menu-item .label { font-size: 14px; }
 
 /* Annotation drawing: crosshair over pages, live preview overlay. */
 #viewport.tool-active .page-wrap { cursor: crosshair; }
@@ -3330,6 +3341,7 @@ const P = {
   openfolder:'<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 11h18"/>',
   copyfile:'<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M4 16V4a2 2 0 0 1 2-2h8"/><path d="M12 12v5M9.5 14.5h5"/>',
   chevdown:'<path d="M6 9l6 6 6-6"/>',
+  more:    '<circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/>',
   image:   '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>',
   imgpdf:  '<rect x="3" y="3" width="14" height="14" rx="2"/><circle cx="7.5" cy="7.5" r="1.2"/><path d="M17 12l-4-4L6 15"/><path d="M14 17v4h7v-7h-4"/>',
   compress:'<path d="M9 3v6M9 9l-3-3M9 9 6 12M15 21v-6M15 15l3 3M15 15l3-3"/><path d="M3 9h6v6H3zM15 9h6v6h-6z" fill="none"/>',
@@ -5106,6 +5118,7 @@ const redo = __m_core_runner.redo;
 const historyStatus = __m_core_runner.historyStatus;
 const savePrefs = __m_core_state.savePrefs;
 const selectedPages = __m_ui_thumbs.selectedPages;
+const openModal = __m_ui_modal.openModal;
 const confirmModal = __m_ui_modal.confirmModal;
 const formModal = __m_ui_modal.formModal;
 const toast = __m_ui_toast.toast;
@@ -5170,6 +5183,13 @@ function initToolbar() {
   on('tool:changed', ({ tool }) => reflectTool(tool));
   on('theme:changed', ({ theme }) => { const tb = document.getElementById('btn-theme'); if (tb) tb.querySelector('span').innerHTML = icon(theme === 'light' ? 'moon' : 'sun'); });
   refresh();
+
+  // Responsive overflow: re-fold the page ops whenever the toolbar's width changes.
+  // Observing the toolbar (not a child) means fit()'s display toggles can't re-trigger
+  // it — its border-box stays pinned to the viewport width.
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(scheduleFit).observe(bar);
+  window.addEventListener('resize', scheduleFit);
+  scheduleFit();
 }
 
 function reflectTool(tool) {
@@ -5202,19 +5222,7 @@ function render(version) {
       (redoBtn = btn('redo', '', () => redo(), { needsDoc: true })),
     ]),
     el('div.sep'),
-    el('div.group', {}, [
-      btn('rotate', '', () => dispatch('pages.rotate', { pages: targetPages(), angle: 90 }), { needsDoc: true }),
-      btn('trash', '', onDelete, { needsDoc: true, danger: true }),
-      btn('copy', '', () => dispatch('pages.duplicate', { pages: targetPages() }), { needsDoc: true }),
-      btn('insert', '', onInsert, { needsDoc: true }),
-      btn('scale', '', onScale, { needsDoc: true }),
-      btn('merge', '', mergePdf, { needsDoc: true }),
-      btn('mark', '', openMarksMenu, { needsDoc: true }),
-      btn('forms', '', openFormsDialog, { needsDoc: true }),
-      btn('ocr', '', openOcrMenu, { needsDoc: true }),
-      btn('download', '', openConvertMenu, { needsDoc: true, title: 'Convert / Export' }),
-      btn('info', '', onMetadata, { needsDoc: true }),
-    ]),
+    buildPageOps(),
     el('div.sep'),
     (toolsGroup = el('div.group', {}, [
       toolBtn('cursor', null, 'Select'),
@@ -5243,7 +5251,75 @@ function render(version) {
   );
 }
 
-let undoBtn, redoBtn, fname, toolsGroup;
+let undoBtn, redoBtn, fname, toolsGroup, pageOpsGroup, moreBtn, pageOps = [];
+
+// Page ops in priority order (most-used first). rotate/trash/copy/insert/scale/merge are
+// direct one-click actions; the trailing five open dialogs. fit() folds them from the
+// tail into the "More" menu when the toolbar would overflow. The `title` on each inline
+// button is preserved verbatim — the guide capture selects these by title at 1600px,
+// where nothing folds — while the menu rows get fuller human labels.
+function buildPageOps() {
+  const make = (iconName, title, menuLabel, run, danger = false) => {
+    const b = btn(iconName, '', run, { needsDoc: true, danger, title });
+    return { b, iconName, title, menuLabel, danger, run, folded: false };
+  };
+  pageOps = [
+    make('rotate', 'rotate', 'Rotate 90°',         () => dispatch('pages.rotate', { pages: targetPages(), angle: 90 })),
+    make('trash',  'trash',  'Delete pages',        onDelete, true),
+    make('copy',   'copy',   'Duplicate pages',     () => dispatch('pages.duplicate', { pages: targetPages() })),
+    make('insert', 'insert', 'Insert blank page',   onInsert),
+    make('scale',  'scale',  'Scale pages…',        onScale),
+    make('merge',  'merge',  'Merge a PDF in…',     mergePdf),
+    make('mark',   'mark',   'Add marks…',          openMarksMenu),
+    make('forms',  'forms',  'Edit form fields…',   openFormsDialog),
+    make('ocr',    'ocr',    'OCR text layer…',     openOcrMenu),
+    make('download', 'Convert / Export', 'Convert / Export…', openConvertMenu),
+    make('info',   'info',   'Document metadata…',  onMetadata),
+  ];
+  moreBtn = btn('more', '', openMoreMenu, { needsDoc: true, title: 'More actions' });
+  moreBtn.id = 'btn-more';
+  moreBtn.setAttribute('aria-haspopup', 'menu');
+  moreBtn.style.display = 'none';
+  pageOpsGroup = el('div.group', { id: 'pageops' }, [...pageOps.map((p) => p.b), moreBtn]);
+  return pageOpsGroup;
+}
+
+// Fold the lowest-priority page ops into the More menu until the toolbar fits — pure
+// width math on the live layout (no hard-coded breakpoints), so it's correct at any
+// width. overflow:hidden in CSS is the backstop; this keeps everything *reachable*.
+function fit() {
+  if (!bar || !pageOpsGroup) return;
+  for (const p of pageOps) { p.b.style.display = ''; p.folded = false; }
+  moreBtn.style.display = 'none';
+  let i = pageOps.length - 1;
+  while (i >= 0 && bar.scrollWidth > bar.clientWidth + 1) {
+    pageOps[i].b.style.display = 'none';
+    pageOps[i].folded = true;
+    moreBtn.style.display = '';
+    i -= 1;
+  }
+}
+
+let fitQueued = false;
+function scheduleFit() {
+  if (fitQueued) return;
+  fitQueued = true;
+  requestAnimationFrame(() => { fitQueued = false; fit(); });
+}
+
+// The folded page ops as a vertical list. Each row runs the same handler as its toolbar
+// button and mirrors its disabled (needs-a-document) state.
+function openMoreMenu() {
+  const folded = pageOps.filter((p) => p.folded);
+  if (!folded.length) return;
+  const content = ({ close }) => el('div.menu-list', { role: 'menu' }, folded.map((p) =>
+    el('button', {
+      class: `btn menu-item ${p.danger ? 'danger' : ''}`, role: 'menuitem', disabled: p.b.disabled,
+      onClick: async () => { close(); await p.run(); },
+    }, [el('span', { html: icon(p.iconName) }), el('span.label', { text: p.menuLabel })])
+  ));
+  return openModal({ title: 'More actions', content, actions: [{ label: 'Close', value: true }] });
+}
 
 function refresh() {
   const open = !!state.doc;
