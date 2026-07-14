@@ -54,7 +54,7 @@
 .annot-preview { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
 
 /* ── Body: rail + viewport ───────────────────────────────────────────────────── */
-#body { flex: 1; display: flex; min-height: 0; }
+#body { flex: 1; display: flex; min-height: 0; position: relative; /* findbar anchors here */ }
 
 #rail {
   width: var(--rail-w); flex: 0 0 auto;
@@ -174,4 +174,26 @@
   flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
   padding: 8px var(--sp-4); background: var(--accent-soft); border-bottom: 1px solid var(--panel-border);
   font-size: 13px;
+}
+
+/* ── findbar (mod+f) ──────────────────────────────────────────────────────────── */
+#findbar {
+  position: absolute; top: 12px; right: 24px; z-index: 40;
+  display: flex; align-items: center; gap: 6px;
+  background: var(--panel); border: 1px solid var(--panel-border);
+  border-radius: 10px; padding: 6px 8px; box-shadow: var(--shadow-pop);
+}
+#findbar.hidden { display: none; }
+#findbar input {
+  width: 220px; background: var(--bg-sunken); color: var(--fg);
+  border: 1px solid var(--panel-border); border-radius: 6px;
+  padding: 5px 8px; font-size: 13px; outline: none;
+}
+#findbar input:focus { border-color: var(--accent); }
+#findbar .count { font-size: 12px; color: var(--fg-faint); min-width: 64px; text-align: center; }
+#findbar .btn.icon { width: 26px; height: 26px; padding: 0; font-size: 15px; line-height: 1; }
+.find-hit {
+  position: absolute; pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  outline: 2px solid var(--accent); border-radius: 2px;
 }

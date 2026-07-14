@@ -155,7 +155,7 @@ button { font-family: inherit; font-size: inherit; color: inherit; }
 .annot-preview { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
 
 /* ── Body: rail + viewport ───────────────────────────────────────────────────── */
-#body { flex: 1; display: flex; min-height: 0; }
+#body { flex: 1; display: flex; min-height: 0; position: relative; /* findbar anchors here */ }
 
 #rail {
   width: var(--rail-w); flex: 0 0 auto;
@@ -277,6 +277,28 @@ button { font-family: inherit; font-size: inherit; color: inherit; }
   font-size: 13px;
 }
 
+/* ── findbar (mod+f) ──────────────────────────────────────────────────────────── */
+#findbar {
+  position: absolute; top: 12px; right: 24px; z-index: 40;
+  display: flex; align-items: center; gap: 6px;
+  background: var(--panel); border: 1px solid var(--panel-border);
+  border-radius: 10px; padding: 6px 8px; box-shadow: var(--shadow-pop);
+}
+#findbar.hidden { display: none; }
+#findbar input {
+  width: 220px; background: var(--bg-sunken); color: var(--fg);
+  border: 1px solid var(--panel-border); border-radius: 6px;
+  padding: 5px 8px; font-size: 13px; outline: none;
+}
+#findbar input:focus { border-color: var(--accent); }
+#findbar .count { font-size: 12px; color: var(--fg-faint); min-width: 64px; text-align: center; }
+#findbar .btn.icon { width: 26px; height: 26px; padding: 0; font-size: 15px; line-height: 1; }
+.find-hit {
+  position: absolute; pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  outline: 2px solid var(--accent); border-radius: 2px;
+}
+
 </style>
 </head>
 <body>
@@ -338,14 +360,14 @@ const MANIFEST = {
   // Tesseract is loaded by core/ocr.js (multi-file: worker + embedded-wasm core + lang),
   // not through loadEngine — recorded here as the integrity pin + version-of-record.
   'tesseract': {
-    version: '5.1.1',
+    version: '7.0.0',
     integrity: {
-      'tesseract.esm.min.js': '2537be686335e4b2637e933cdc85a52dd80267a592689c1bd63235c8591540ae',
-      'worker.min.js': 'aca1229639fc9907d86f96e825955a2b7c5716d17f3bc3acd71f9c7ab66181fc',
-      'tesseract-core-simd-lstm.wasm.js': 'ce20eda9533cbed1e6c2b4276fbae1e0adc61b6754b5513084be601787b457cf',
+      'tesseract.esm.min.js': '64871d76c75609fd5413b88a8171e2ef40deedd77d5875ba23df104b2d05eb29',
+      'worker.min.js': '576b7df7e3393e137e51849357c9adb53fe7ac1bb69bfa06cf3d61520f182c6d',
+      'tesseract-core-simd-lstm.wasm.js': 'c58b46a4c796c0b8afccf77591d5b875b6896b45d402bbce8caa6f5362447b38',
       'eng.traineddata.gz': '18c1ac52b75e35d44735fb6c2a60acfaf23033524653200738e98f0243edb75b',
     },
-    sizeHint: '6.6 MB',
+    sizeHint: '6.5 MB',
   },
 };
 
@@ -2118,7 +2140,7 @@ return { ops };
 
 /* core/ocr.js */
 const __m_core_ocr = (() => {
-// ocr.js — the OCR engine adapter (Tesseract.js v5, browser). Everything is vendored
+// ocr.js — the OCR engine adapter (Tesseract.js v7, browser). Everything is vendored
 // same-origin under /engines/tesseract — the worker, the wasm core (embedded), and the
 // English model — so OCR runs with NO network fetch and NO CDN: it works offline, and
 // the "ask before any multi-MB download" rule is moot because nothing downloads. The
@@ -2127,10 +2149,10 @@ const __m_core_ocr = (() => {
 const enginesBase = __m_core_engines.enginesBase;
 const emit = __m_core_events.emit;
 
-const VER = '5.1.1';
+const VER = '7.0.0';
 // Integrity pin for the entry module (fetch → verify → import). The worker/core/lang
 // are loaded by Tesseract from the same-origin vendored paths (version-pinned).
-const ESM_SHA = '2537be686335e4b2637e933cdc85a52dd80267a592689c1bd63235c8591540ae';
+const ESM_SHA = '64871d76c75609fd5413b88a8171e2ef40deedd77d5875ba23df104b2d05eb29';
 
 let _mod = null;       // tesseract.esm module
 let _worker = null;    // a live Tesseract worker (reused across pages)
@@ -2146,7 +2168,7 @@ async function loadModule() {
   const got = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))].map(b => b.toString(16).padStart(2, '0')).join('');
   if (got !== ESM_SHA) throw new Error('OCR engine integrity check FAILED — refusing to load a tampered bundle.');
   const imported = await import(/* @vite-ignore */ url);
-  _mod = imported.default || imported; // tesseract.js v5 ESM exports its API under default
+  _mod = imported.default || imported; // tesseract.js ESM exports its API under default
   return _mod;
 }
 
@@ -2158,7 +2180,7 @@ async function getOcrWorker(onProgress) {
   const base = dir();
   _worker = await createWorker('eng', 1, {
     workerPath: `${base}/worker.min.js`,
-    corePath: `${base}/`,                 // dir; Tesseract appends tesseract-core-simd.wasm.js
+    corePath: `${base}/tesseract-core-simd-lstm.wasm.js`, // exact file → no feature-detect, deterministic across browsers
     langPath: `${base}/`,                 // dir; contains eng.traineddata.gz
     workerBlobURL: false,                 // load worker from the path (CSP worker-src 'self')
     logger: (m) => { if (m?.status) { emit('ocr:progress', m); onProgress?.(m); } },
@@ -2166,12 +2188,15 @@ async function getOcrWorker(onProgress) {
   return _worker;
 }
 
-// Recognize a canvas (or ImageData/HTMLImage). Returns Tesseract's data:
-// { text, words: [{ text, confidence, bbox:{x0,y0,x1,y1} }], ... }.
+// Recognize a canvas (or ImageData/HTMLImage). Returns Tesseract's data plus a flat
+// `words` list: { text, words: [{ text, confidence, bbox:{x0,y0,x1,y1} }], ... }.
+// v6+ removed `words` from the default result — request `blocks` and flatten the
+// blocks→paragraphs→lines→words hierarchy back to the flat list the ops consume.
 async function recognizeCanvas(canvas, onProgress) {
   const worker = await getOcrWorker(onProgress);
-  const { data } = await worker.recognize(canvas);
-  return data;
+  const { data } = await worker.recognize(canvas, {}, { text: true, blocks: true });
+  const words = (data.blocks || []).flatMap((b) => (b.paragraphs || []).flatMap((p) => (p.lines || []).flatMap((l) => l.words || [])));
+  return { ...data, words };
 }
 
 async function terminateOcr() { if (_worker) { try { await _worker.terminate(); } catch {} _worker = null; } }
@@ -2425,13 +2450,14 @@ const __m_core_keyboard = (() => {
 // combos with a context; the dispatcher resolves which binding wins. The suite
 // shares this so every tool's shortcuts read the same way.
 //
-// THE S-COLLISION, RESOLVED (handoff §12): "save" and "strike" both want S.
-//   • mod+s  → Save        — context 'global', always wins (has a modifier).
-//   • s      → Strike tool — context 'viewer', bare key, fires ONLY when a viewer
-//                            has focus and the user is not typing in a field.
-// A modifier'd combo and a bare key never collide because they normalize to
-// different strings ('mod+s' vs 's'). The remaining risk — a bare 's' captured
-// while typing — is removed by the editable-target guard below.
+// THE S-COLLISION, RESOLVED (handoff §12): "save" and a bare-key tool both want S.
+//   • mod+s      → Save — context 'global', always wins (has a modifier).
+//   • bare keys  → tool shortcuts (v/h/r/l/d/t/e/w/x) — context 'viewer', fire ONLY
+//                  when a viewer has focus and the user is not typing in a field.
+// (No bare 's' binding shipped — the planned Strike tool didn't; the collision rule
+// stands for any future bare-key tool.) A modifier'd combo and a bare key never
+// collide because they normalize to different strings ('mod+s' vs 's'). The remaining
+// risk — a bare key captured while typing — is removed by the editable-target guard below.
 
 function isEditable(el) {
   if (!el) return false;
@@ -5549,6 +5575,142 @@ function wireGlobalDrop() {
 return { initWelcome };
 })();
 
+/* ui/findbar.js */
+const __m_ui_findbar = (() => {
+// findbar.js — in-document text search (mod+f). Searches the PDF.js text layer
+// (same geometry math as spanedit), shows "n of m", cycles with Enter/Shift+Enter
+// or the ‹ › buttons, and flashes a highlight over the current match. The index is
+// derived from the render doc and invalidated on any document change; a query only
+// ever reads text runs — search never mutates the document.
+
+const el = __m_ui_dom.el;
+const state = __m_core_state.state;
+const on = __m_core_events.on;
+const currentRenderDoc = __m_ui_rendoc.currentRenderDoc;
+const scrollToPage = __m_ui_viewer.scrollToPage;
+
+let bar = null, input = null, countEl = null, hitEl = null;
+let index = null;        // [{ page, str, x, y, w, h }] — normalized text runs
+let indexFor = null;     // the render doc the index was built from
+let matches = [];        // [{ page, x, y, w, h }] — normalized sub-run boxes
+let cur = -1;
+let qtoken = 0;          // supersedes in-flight queries (buildIndex awaits mid-run)
+
+function initFindbar() {
+  bar = el('div', { id: 'findbar', role: 'search', 'aria-label': 'Find in document' }, [
+    (input = el('input', { type: 'text', placeholder: 'Find in document…', 'aria-label': 'Find text' })),
+    (countEl = el('span', { class: 'count', text: '' })),
+    el('button', { class: 'btn icon', title: 'Previous match', 'aria-label': 'Previous match', onClick: () => step(-1) }, ['‹']),
+    el('button', { class: 'btn icon', title: 'Next match', 'aria-label': 'Next match', onClick: () => step(1) }, ['›']),
+    el('button', { class: 'btn icon', title: 'Close (Esc)', 'aria-label': 'Close find', onClick: closeFindbar }, ['×']),
+  ]);
+  bar.classList.add('hidden');
+  document.getElementById('body').append(bar);
+
+  let debounce;
+  input.addEventListener('input', () => { clearTimeout(debounce); debounce = setTimeout(() => runQuery(true), 160); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); closeFindbar(); }
+    else if (e.key === 'Enter') { e.preventDefault(); step(e.shiftKey ? -1 : 1); }
+  });
+
+  // Any mutation invalidates the index (text may have moved). Re-query on
+  // rendoc:ready, not doc:changed — the new render doc only exists once the
+  // re-derive lands; at doc:changed time currentRenderDoc() is still the old one.
+  on('rendoc:ready', () => { index = null; if (isOpen() && input.value) runQuery(false); });
+  on('doc:closed', closeFindbar);
+}
+
+function isOpen() { return bar && !bar.classList.contains('hidden'); }
+
+function openFindbar() {
+  if (!state.doc) return;
+  bar.classList.remove('hidden');
+  input.focus();
+  input.select();
+}
+
+function closeFindbar() {
+  if (!bar) return;
+  bar.classList.add('hidden');
+  clearHit();
+  matches = []; cur = -1;
+  countEl.textContent = '';
+}
+
+// ── index: one pass over the text layer, normalized page-relative geometry ──────
+async function buildIndex() {
+  const pdf = currentRenderDoc();
+  if (!pdf) return [];
+  if (index && indexFor === pdf) return index;
+  const runs = [];
+  for (let p = 0; p < pdf.numPages; p += 1) {
+    const page = await pdf.getPage(p + 1);
+    const vp = page.getViewport({ scale: 1 });
+    const W = vp.width, H = vp.height;
+    const tc = await page.getTextContent();
+    for (const it of tc.items) {
+      if (!it.str || !it.str.trim()) continue;
+      const [, b, , d, e, f] = it.transform;
+      const h = it.height || Math.hypot(b, d) || 10;
+      const w = it.width || 0;
+      runs.push({ page: p, str: it.str, x: e / W, y: (H - (f + h)) / H, w: w / W, h: h / H });
+    }
+  }
+  index = runs;
+  indexFor = pdf;
+  return runs;
+}
+
+async function runQuery(resetToFirst) {
+  const my = ++qtoken;
+  const q = input.value.trim().toLowerCase();
+  clearHit();
+  matches = []; cur = -1;
+  if (!q) { countEl.textContent = ''; return; }
+  const runs = await buildIndex();
+  if (my !== qtoken) return; // a newer query took over while the index built
+  for (const r of runs) {
+    const hay = r.str.toLowerCase();
+    let i = hay.indexOf(q);
+    while (i !== -1) {
+      // Sub-run box by character proportion — approximate, fine for a flash highlight.
+      matches.push({ page: r.page, x: r.x + (i / r.str.length) * r.w, y: r.y, w: Math.max((q.length / r.str.length) * r.w, 0.004), h: r.h });
+      i = hay.indexOf(q, i + 1);
+    }
+  }
+  if (!matches.length) { countEl.textContent = '0 matches'; return; }
+  cur = resetToFirst || cur < 0 ? 0 : Math.min(cur, matches.length - 1);
+  showCurrent();
+}
+
+function step(dir) {
+  if (!matches.length) { runQuery(true); return; }
+  cur = (cur + dir + matches.length) % matches.length;
+  showCurrent();
+}
+
+function showCurrent() {
+  const m = matches[cur];
+  countEl.textContent = `${cur + 1} of ${matches.length}`;
+  scrollToPage(m.page);
+  clearHit();
+  const wrap = document.querySelector(`.page-wrap[data-page="${m.page}"]`);
+  if (!wrap) return;
+  hitEl = el('div', { class: 'find-hit' });
+  const pad = 0.004; // a breath of padding so the box doesn't shave the glyphs
+  hitEl.style.left = `${(m.x - pad) * 100}%`;
+  hitEl.style.top = `${(m.y - pad) * 100}%`;
+  hitEl.style.width = `${(m.w + pad * 2) * 100}%`;
+  hitEl.style.height = `${(m.h + pad * 2) * 100}%`;
+  wrap.append(hitEl);
+}
+
+function clearHit() { if (hitEl) { hitEl.remove(); hitEl = null; } }
+
+return { initFindbar, openFindbar, closeFindbar };
+})();
+
 /* ui/recovery.js */
 const __m_ui_recovery = (() => {
 // recovery.js — crash recovery via the OPFS staging layer. While you have unsaved
@@ -5646,6 +5808,8 @@ const initThumbs = __m_ui_thumbs.initThumbs;
 const initAnnotateTools = __m_ui_annotate_tools.initAnnotateTools;
 const setTool = __m_ui_annotate_tools.setTool;
 const initWelcome = __m_ui_welcome.initWelcome;
+const initFindbar = __m_ui_findbar.initFindbar;
+const openFindbar = __m_ui_findbar.openFindbar;
 const initRecovery = __m_ui_recovery.initRecovery;
 const openPdf = __m_ui_fileops.openPdf;
 const savePdf = __m_ui_fileops.savePdf;
@@ -5674,6 +5838,7 @@ function wireKeyboard() {
     .register('mod+shift+s', () => savePdfAs(), { context: 'global', label: 'Save as' })
     .register(']', () => nextFile(), { context: 'viewer', label: 'Next PDF (folder mode)' })
     .register('[', () => prevFile(), { context: 'viewer', label: 'Previous PDF (folder mode)' })
+    .register('mod+f', () => openFindbar(), { context: 'viewer', label: 'Find text' })
     .register('mod+z', () => undo(), { context: 'global', label: 'Undo' })
     .register('mod+shift+z', () => redo(), { context: 'global', label: 'Redo' })
     .register('?', () => openHelp(), { context: 'global', label: 'Help' })
@@ -5724,6 +5889,7 @@ function boot() {
   initStatusbar();
   initToolbar();
   initWelcome();
+  initFindbar();
 
   wireKeyboard();
   initRecovery();

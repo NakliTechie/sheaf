@@ -29,14 +29,14 @@ export const MANIFEST = {
   // Tesseract is loaded by core/ocr.js (multi-file: worker + embedded-wasm core + lang),
   // not through loadEngine — recorded here as the integrity pin + version-of-record.
   'tesseract': {
-    version: '5.1.1',
+    version: '7.0.0',
     integrity: {
-      'tesseract.esm.min.js': '2537be686335e4b2637e933cdc85a52dd80267a592689c1bd63235c8591540ae',
-      'worker.min.js': 'aca1229639fc9907d86f96e825955a2b7c5716d17f3bc3acd71f9c7ab66181fc',
-      'tesseract-core-simd-lstm.wasm.js': 'ce20eda9533cbed1e6c2b4276fbae1e0adc61b6754b5513084be601787b457cf',
+      'tesseract.esm.min.js': '64871d76c75609fd5413b88a8171e2ef40deedd77d5875ba23df104b2d05eb29',
+      'worker.min.js': '576b7df7e3393e137e51849357c9adb53fe7ac1bb69bfa06cf3d61520f182c6d',
+      'tesseract-core-simd-lstm.wasm.js': 'c58b46a4c796c0b8afccf77591d5b875b6896b45d402bbce8caa6f5362447b38',
       'eng.traineddata.gz': '18c1ac52b75e35d44735fb6c2a60acfaf23033524653200738e98f0243edb75b',
     },
-    sizeHint: '6.6 MB',
+    sizeHint: '6.5 MB',
   },
 };
 

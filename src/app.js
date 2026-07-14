@@ -19,6 +19,7 @@ import { initViewer, zoomBy, setFitMode, scrollToPage } from './ui/viewer.js';
 import { initThumbs } from './ui/thumbs.js';
 import { initAnnotateTools, setTool } from './ui/annotate-tools.js';
 import { initWelcome } from './ui/welcome.js';
+import { initFindbar, openFindbar } from './ui/findbar.js';
 import { initRecovery } from './ui/recovery.js';
 import { openPdf, savePdf, savePdfAs, openFolder, nextFile, prevFile } from './ui/fileops.js';
 import { openHelp } from './ui/help.js';
@@ -42,6 +43,7 @@ function wireKeyboard() {
     .register('mod+shift+s', () => savePdfAs(), { context: 'global', label: 'Save as' })
     .register(']', () => nextFile(), { context: 'viewer', label: 'Next PDF (folder mode)' })
     .register('[', () => prevFile(), { context: 'viewer', label: 'Previous PDF (folder mode)' })
+    .register('mod+f', () => openFindbar(), { context: 'viewer', label: 'Find text' })
     .register('mod+z', () => undo(), { context: 'global', label: 'Undo' })
     .register('mod+shift+z', () => redo(), { context: 'global', label: 'Redo' })
     .register('?', () => openHelp(), { context: 'global', label: 'Help' })
@@ -92,6 +94,7 @@ function boot() {
   initStatusbar();
   initToolbar();
   initWelcome();
+  initFindbar();
 
   wireKeyboard();
   initRecovery();

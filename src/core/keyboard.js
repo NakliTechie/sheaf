@@ -2,13 +2,14 @@
 // combos with a context; the dispatcher resolves which binding wins. The suite
 // shares this so every tool's shortcuts read the same way.
 //
-// THE S-COLLISION, RESOLVED (handoff §12): "save" and "strike" both want S.
-//   • mod+s  → Save        — context 'global', always wins (has a modifier).
-//   • s      → Strike tool — context 'viewer', bare key, fires ONLY when a viewer
-//                            has focus and the user is not typing in a field.
-// A modifier'd combo and a bare key never collide because they normalize to
-// different strings ('mod+s' vs 's'). The remaining risk — a bare 's' captured
-// while typing — is removed by the editable-target guard below.
+// THE S-COLLISION, RESOLVED (handoff §12): "save" and a bare-key tool both want S.
+//   • mod+s      → Save — context 'global', always wins (has a modifier).
+//   • bare keys  → tool shortcuts (v/h/r/l/d/t/e/w/x) — context 'viewer', fire ONLY
+//                  when a viewer has focus and the user is not typing in a field.
+// (No bare 's' binding shipped — the planned Strike tool didn't; the collision rule
+// stands for any future bare-key tool.) A modifier'd combo and a bare key never
+// collide because they normalize to different strings ('mod+s' vs 's'). The remaining
+// risk — a bare key captured while typing — is removed by the editable-target guard below.
 
 function isEditable(el) {
   if (!el) return false;
