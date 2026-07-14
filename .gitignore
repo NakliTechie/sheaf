@@ -18,3 +18,4 @@ plan/
 # but never commit fetched node_modules or build caches.
 node_modules/
 .cache/
+.worktrees/
