@@ -1,6 +1,6 @@
 # Sheaf guide — capture log
 
-18/18 feature shots rendered ok · 1 console error(s)
+18/18 feature shots rendered ok · 0 console error(s)
 
 ## Shots
 - ok   01-welcome.png  (107 KB)
@@ -18,9 +18,9 @@
 - ok   13-metadata.png  (233 KB)
 - ok   14-save.png  (207 KB)
 - ok   15-ai.png  (234 KB)
-- ok   16-settings.png  (270 KB)
+- ok   16-settings.png  (271 KB)
 - ok   17-help.png  (246 KB)
 - ok   18-light-theme.png  (334 KB)
 
 ## Console errors
-- [(boot)] The Content Security Policy directive 'frame-ancestors' is ignored when delivered via a <meta> element.
+- none
