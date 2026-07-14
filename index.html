@@ -10,7 +10,7 @@
        https endpoint they configure) and a local Ollama/LM Studio bridge. With no AI
        configured nothing connects anywhere; with a local model nothing leaves the
        machine. There is no first-party backend to talk to. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; worker-src 'self' blob:; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; frame-ancestors 'none'; object-src 'none'; base-uri 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; worker-src 'self' blob:; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; object-src 'none'; base-uri 'self'">
   <style>
 /* ui/theme.css */
 /* theme.css — design tokens (nakli-creative-primitives convention). Every colour,
@@ -5559,6 +5559,7 @@ const __m_ui_recovery = (() => {
 // document's bytes touch disk, and it is self-cleaning.
 
 const state = __m_core_state.state;
+const markDirty = __m_core_state.markDirty;
 const on = __m_core_events.on;
 const storage = __m_core_storage;
 const el = __m_ui_dom.el;
@@ -5596,7 +5597,9 @@ function offerRecovery(staged) {
     el('span', { html: `Unsaved changes to <b>${escapeHtml(name)}</b> from your last session were found.` }),
     el('div', { style: 'display:flex;gap:8px' }, [
       el('button', {
-        class: 'btn primary', onClick: async () => { banner.remove(); await openBytes(staged.bytes, name); },
+        // The recovered doc exists nowhere durable — it IS unsaved work, so mark it
+        // dirty (open normally resets the flag) or the user gets no save nudge.
+        class: 'btn primary', onClick: async () => { banner.remove(); await openBytes(staged.bytes, name); markDirty(true); },
       }, ['Recover']),
       el('button', { class: 'btn', onClick: () => { banner.remove(); storage.clearStage(); } }, ['Discard']),
     ]),

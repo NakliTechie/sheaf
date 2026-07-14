@@ -5,7 +5,7 @@
 // as in-flight unsaved work, never as durable persistence. This is the one place a
 // document's bytes touch disk, and it is self-cleaning.
 
-import { state } from '../core/state.js';
+import { state, markDirty } from '../core/state.js';
 import { on } from '../core/events.js';
 import * as storage from '../core/storage.js';
 import { el } from './dom.js';
@@ -43,7 +43,9 @@ function offerRecovery(staged) {
     el('span', { html: `Unsaved changes to <b>${escapeHtml(name)}</b> from your last session were found.` }),
     el('div', { style: 'display:flex;gap:8px' }, [
       el('button', {
-        class: 'btn primary', onClick: async () => { banner.remove(); await openBytes(staged.bytes, name); },
+        // The recovered doc exists nowhere durable — it IS unsaved work, so mark it
+        // dirty (open normally resets the flag) or the user gets no save nudge.
+        class: 'btn primary', onClick: async () => { banner.remove(); await openBytes(staged.bytes, name); markDirty(true); },
       }, ['Recover']),
       el('button', { class: 'btn', onClick: () => { banner.remove(); storage.clearStage(); } }, ['Discard']),
     ]),
