@@ -188,6 +188,10 @@ button { font-family: inherit; font-size: inherit; color: inherit; }
 }
 .page-wrap { position: relative; box-shadow: var(--page-shadow); background: #fff; }
 .page-wrap canvas { display: block; }
+/* Paginated view: show only the active page; navigation swaps which one is active.
+   Hidden wraps take no space or flex-gap, so the single page centers as normal. */
+#viewport.paginated .page-wrap { display: none; }
+#viewport.paginated .page-wrap.is-active { display: block; }
 .page-wrap .badge {
   position: absolute; top: 6px; left: 6px; font-size: 11px; color: var(--fg);
   background: var(--overlay); padding: 2px 7px; border-radius: 8px; pointer-events: none;
@@ -3511,6 +3515,8 @@ async function renderAll() {
     return { p, canvas, wrap };
   });
 
+  applyViewMode();
+
   await Promise.all(slots.map(async ({ p, canvas, wrap }) => {
     if (my !== renderToken) return;
     try {
@@ -3525,8 +3531,35 @@ async function renderAll() {
   if (my === renderToken) emit('viewer:rendered', { pageCount: pages.length });
 }
 
+// Paginated mode shows exactly one page-wrap (the active one); CSS hides the rest.
+// Continuous mode clears the class and shows them all. Called after every renderAll
+// (the wraps are rebuilt each render) and whenever the mode or active page changes.
+function applyViewMode() {
+  if (!viewport) return;
+  const paginated = state.view.mode === 'paginated';
+  viewport.classList.toggle('paginated', paginated);
+  if (!paginated) { for (const w of viewport.querySelectorAll('.page-wrap.is-active')) w.classList.remove('is-active'); return; }
+  const count = state.doc ? state.doc.pageCount() : 0;
+  const idx = Math.max(0, Math.min(state.view.pageIndex, count - 1));
+  state.view.pageIndex = idx;
+  for (const w of viewport.querySelectorAll('.page-wrap')) w.classList.toggle('is-active', Number(w.dataset.page) === idx);
+}
+
+// Make `index` the active page in paginated mode (swap which wrap shows), reset its
+// scroll to the top, and announce it — the same page:current signal continuous mode
+// emits from scroll tracking, so the statusbar/rail stay in sync in both modes.
+function setActivePage(index) {
+  const count = state.doc ? state.doc.pageCount() : 0;
+  const idx = Math.max(0, Math.min(index, count - 1));
+  state.view.pageIndex = idx;
+  for (const w of viewport.querySelectorAll('.page-wrap')) w.classList.toggle('is-active', Number(w.dataset.page) === idx);
+  viewport.scrollTop = 0;
+  emit('page:current', { index: idx });
+}
+
 function trackCurrentPage() {
   if (!viewport) return;
+  if (state.view.mode === 'paginated') return; // active page is set by navigation, not scroll
   const mid = viewport.scrollTop + viewport.clientHeight / 2;
   let best = 0, bestDist = Infinity;
   for (const wrap of viewport.querySelectorAll('.page-wrap')) {
@@ -3558,12 +3591,26 @@ function effectiveCurrentScale() {
 
 function currentScalePct() { return Math.round(effectiveCurrentScale() * 100); }
 
+// The single navigation entry point — arrows, thumbnail clicks, and Cmd+F match-jump
+// all call this. In continuous mode it scrolls the page into view; in paginated mode
+// it swaps the visible page. One function, so navigation works identically in both.
 function scrollToPage(index) {
+  if (state.view.mode === 'paginated') { setActivePage(index); return; }
   const wrap = viewport.querySelector(`.page-wrap[data-page="${index}"]`);
   wrap?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-return { initViewer, setFitMode, zoomBy, currentScalePct, scrollToPage };
+// Switch continuous ↔ paginated. Persist the pref and re-render; renderAll re-applies
+// the mode (show-all vs show-active) once the pages are rebuilt — same path fit changes
+// take, so scale and visibility settle together.
+function setViewMode(mode) {
+  if (mode !== 'continuous' && mode !== 'paginated') return;
+  state.view.mode = mode;
+  emit('prefs:save', null);
+  emit('view:changed', null);
+}
+
+return { initViewer, setFitMode, zoomBy, currentScalePct, scrollToPage, setViewMode };
 })();
 
 /* ui/thumbs.js */
@@ -4237,6 +4284,7 @@ const state = __m_core_state.state;
 const savePrefs = __m_core_state.savePrefs;
 const setAgentFace = __m_core_agent.setAgentFace;
 const setFitMode = __m_ui_viewer.setFitMode;
+const setViewMode = __m_ui_viewer.setViewMode;
 const MANIFEST = __m_core_engines.MANIFEST;
 const emit = __m_core_events.emit;
 
@@ -4250,7 +4298,7 @@ function openSettings() {
       })),
 
     settingRow('Default view', 'How pages stack in the viewport.',
-      select(['continuous', 'paginated'], state.view.mode, (v) => { state.view.mode = v; savePrefs(); })),
+      select(['continuous', 'paginated'], state.view.mode, (v) => setViewMode(v))),
 
     settingRow('Fit', 'How pages are scaled to the window.',
       select(['width', 'page', 'actual'], state.view.fitMode === 'custom' ? 'width' : state.view.fitMode, (v) => setFitMode(v))),

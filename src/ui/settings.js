@@ -6,7 +6,7 @@ import { el } from './dom.js';
 import { openModal } from './modal.js';
 import { state, savePrefs } from '../core/state.js';
 import { setAgentFace } from '../core/agent.js';
-import { setFitMode } from './viewer.js';
+import { setFitMode, setViewMode } from './viewer.js';
 import { MANIFEST } from '../core/engines.js';
 import { emit } from '../core/events.js';
 
@@ -20,7 +20,7 @@ export function openSettings() {
       })),
 
     settingRow('Default view', 'How pages stack in the viewport.',
-      select(['continuous', 'paginated'], state.view.mode, (v) => { state.view.mode = v; savePrefs(); })),
+      select(['continuous', 'paginated'], state.view.mode, (v) => setViewMode(v))),
 
     settingRow('Fit', 'How pages are scaled to the window.',
       select(['width', 'page', 'actual'], state.view.fitMode === 'custom' ? 'width' : state.view.fitMode, (v) => setFitMode(v))),

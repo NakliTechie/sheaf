@@ -77,6 +77,8 @@ async function renderAll() {
     return { p, canvas, wrap };
   });
 
+  applyViewMode();
+
   await Promise.all(slots.map(async ({ p, canvas, wrap }) => {
     if (my !== renderToken) return;
     try {
@@ -91,8 +93,35 @@ async function renderAll() {
   if (my === renderToken) emit('viewer:rendered', { pageCount: pages.length });
 }
 
+// Paginated mode shows exactly one page-wrap (the active one); CSS hides the rest.
+// Continuous mode clears the class and shows them all. Called after every renderAll
+// (the wraps are rebuilt each render) and whenever the mode or active page changes.
+function applyViewMode() {
+  if (!viewport) return;
+  const paginated = state.view.mode === 'paginated';
+  viewport.classList.toggle('paginated', paginated);
+  if (!paginated) { for (const w of viewport.querySelectorAll('.page-wrap.is-active')) w.classList.remove('is-active'); return; }
+  const count = state.doc ? state.doc.pageCount() : 0;
+  const idx = Math.max(0, Math.min(state.view.pageIndex, count - 1));
+  state.view.pageIndex = idx;
+  for (const w of viewport.querySelectorAll('.page-wrap')) w.classList.toggle('is-active', Number(w.dataset.page) === idx);
+}
+
+// Make `index` the active page in paginated mode (swap which wrap shows), reset its
+// scroll to the top, and announce it — the same page:current signal continuous mode
+// emits from scroll tracking, so the statusbar/rail stay in sync in both modes.
+function setActivePage(index) {
+  const count = state.doc ? state.doc.pageCount() : 0;
+  const idx = Math.max(0, Math.min(index, count - 1));
+  state.view.pageIndex = idx;
+  for (const w of viewport.querySelectorAll('.page-wrap')) w.classList.toggle('is-active', Number(w.dataset.page) === idx);
+  viewport.scrollTop = 0;
+  emit('page:current', { index: idx });
+}
+
 function trackCurrentPage() {
   if (!viewport) return;
+  if (state.view.mode === 'paginated') return; // active page is set by navigation, not scroll
   const mid = viewport.scrollTop + viewport.clientHeight / 2;
   let best = 0, bestDist = Infinity;
   for (const wrap of viewport.querySelectorAll('.page-wrap')) {
@@ -124,7 +153,21 @@ function effectiveCurrentScale() {
 
 export function currentScalePct() { return Math.round(effectiveCurrentScale() * 100); }
 
+// The single navigation entry point — arrows, thumbnail clicks, and Cmd+F match-jump
+// all call this. In continuous mode it scrolls the page into view; in paginated mode
+// it swaps the visible page. One function, so navigation works identically in both.
 export function scrollToPage(index) {
+  if (state.view.mode === 'paginated') { setActivePage(index); return; }
   const wrap = viewport.querySelector(`.page-wrap[data-page="${index}"]`);
   wrap?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// Switch continuous ↔ paginated. Persist the pref and re-render; renderAll re-applies
+// the mode (show-all vs show-active) once the pages are rebuilt — same path fit changes
+// take, so scale and visibility settle together.
+export function setViewMode(mode) {
+  if (mode !== 'continuous' && mode !== 'paginated') return;
+  state.view.mode = mode;
+  emit('prefs:save', null);
+  emit('view:changed', null);
 }

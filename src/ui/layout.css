@@ -87,6 +87,10 @@
 }
 .page-wrap { position: relative; box-shadow: var(--page-shadow); background: #fff; }
 .page-wrap canvas { display: block; }
+/* Paginated view: show only the active page; navigation swaps which one is active.
+   Hidden wraps take no space or flex-gap, so the single page centers as normal. */
+#viewport.paginated .page-wrap { display: none; }
+#viewport.paginated .page-wrap.is-active { display: block; }
 .page-wrap .badge {
   position: absolute; top: 6px; left: 6px; font-size: 11px; color: var(--fg);
   background: var(--overlay); padding: 2px 7px; border-radius: 8px; pointer-events: none;
