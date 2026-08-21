@@ -153,6 +153,10 @@ function buildPageOps() {
     make('scale',  'scale',  'Scale pages…',        onScale),
     make('merge',  'merge',  'Merge a PDF in…',     mergePdf),
     make('reorder','reorder','Reverse page order',   () => dispatch('pages.reverse', {})),
+    make('rotate', 'orient', 'Set orientation…',      onOrient),
+    make('extract','keeprange','Keep page range…',    onKeepRange),
+    make('scale', 'margin',  'Add margins…',          onAddMargin),
+    make('scale', 'nup',     'N-up (2/4 per sheet)…', onNUp),
     make('mark',   'mark',   'Add marks…',          openMarksMenu),
     make('forms',  'forms',  'Edit form fields…',   openFormsDialog),
     make('ocr',    'ocr',    'OCR text layer…',     openOcrMenu),
@@ -226,6 +230,38 @@ async function onInsert() {
   const at = Math.min(state.view.pageIndex + 1, state.doc.pageCount());
   await dispatch('pages.insertBlank', { at });
   toast(`Inserted a blank page at ${at + 1}`, 'ok');
+}
+
+async function onOrient() {
+  const v = await formModal('Set orientation', [
+    { name: 'angle', label: 'Rotation', type: 'select', value: '0',
+      options: ['0', '90', '180', '270'].map(o => ({ value: o, label: `${o}°` })) },
+  ]);
+  if (v) dispatch('pages.orient', { pages: targetPages(), angle: Number(v.angle) });
+}
+
+async function onKeepRange() {
+  const n = state.doc.pageCount();
+  const v = await formModal('Keep page range', [
+    { name: 'from', label: `First page to keep (1–${n})`, type: 'number', value: 1, min: 1, max: n },
+    { name: 'to', label: `Last page to keep (1–${n})`, type: 'number', value: n, min: 1, max: n },
+  ]);
+  if (v) dispatch('pages.keepRange', { from: (v.from | 0) - 1, to: (v.to | 0) - 1 });
+}
+
+async function onNUp() {
+  const v = await formModal('N-up (pages per sheet)', [
+    { name: 'perSheet', label: 'Pages per sheet', type: 'select', value: '2',
+      options: [{ value: '2', label: '2 per sheet' }, { value: '4', label: '4 per sheet' }] },
+  ]);
+  if (v) dispatch('pages.nUp', { perSheet: Number(v.perSheet) });
+}
+
+async function onAddMargin() {
+  const v = await formModal('Add margins', [
+    { name: 'margin', label: 'Margin (pt) added on every side', type: 'number', value: 36, min: 0, max: 400 },
+  ]);
+  if (v && v.margin) dispatch('pages.addMargin', { margin: v.margin, pages: targetPages() });
 }
 
 async function onScale() {

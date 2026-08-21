@@ -9,14 +9,7 @@ import { openForRender } from '../core/render.js';
 import { SheafDoc } from '../core/doc.js';
 // one canonical metadata-carry (keywords/creator/producer included)
 import { carryMetadata } from './pages.js';
-
-function dataUrlToBytes(dataUrl) {
-  const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
-  const bin = atob(b64);
-  const u8 = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-  return u8;
-}
+import { dataUrlToBytes } from './_util.js';
 
 export const ops = [
   {

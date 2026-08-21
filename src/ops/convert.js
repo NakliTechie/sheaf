@@ -6,12 +6,50 @@
 
 import { openForRender, pageText } from '../core/render.js';
 import { getEngine } from '../core/engines.js';
+import { validatePdfBytes } from '../core/schema.js';
+import { dataUrlToBytes } from './_util.js';
 
-function dataUrlToBytes(dataUrl) {
-  const bin = atob(dataUrl.slice(dataUrl.indexOf(',') + 1));
-  const u8 = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-  return u8;
+// Extract per-page text from raw PDF bytes (browser path — pdf.js).
+async function extractPages(bytes) {
+  const pdf = await openForRender(bytes);
+  const pages = [];
+  for (let i = 0; i < pdf.numPages; i++) pages.push(await pageText(pdf, i));
+  pdf.destroy?.();
+  return pages;
+}
+
+function nonBlankLines(t) { return String(t || '').split('\n').map(s => s.trim()).filter(Boolean); }
+
+// Pure, headless-testable: two per-page text arrays → a Markdown diff summary. Set-based
+// per-page line diff (a summary of added/removed lines, not a full LCS) — honest about
+// what it is. Text-only; the visual-diff half is out of scope (attended).
+export function comparePagesText(pagesA, pagesB) {
+  const maxP = Math.max(pagesA.length, pagesB.length);
+  const out = [];
+  for (let i = 0; i < maxP; i++) {
+    const a = nonBlankLines(pagesA[i]), b = nonBlankLines(pagesB[i]);
+    const aSet = new Set(a), bSet = new Set(b);
+    const removed = a.filter(l => !bSet.has(l));
+    const added = b.filter(l => !aSet.has(l));
+    const parts = [`## Page ${i + 1}`];
+    if (!removed.length && !added.length) { parts.push('_No changes._'); }
+    else {
+      if (removed.length) parts.push('**Removed:**\n' + removed.map(l => `- ${l}`).join('\n'));
+      if (added.length) parts.push('**Added:**\n' + added.map(l => `+ ${l}`).join('\n'));
+    }
+    out.push(parts.join('\n\n'));
+  }
+  return out.join('\n\n---\n\n');
+}
+
+// Pure, headless-testable: per-page extracted text → Markdown. Conservative — no heading
+// synthesis (the text layer carries no reliable font-size signal), just normalized
+// paragraphs with page breaks as horizontal rules.
+export function pagesToMarkdown(pages) {
+  return (pages || [])
+    .map(t => String(t || '').replace(/\r\n?/g, '\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim())
+    .filter(Boolean)
+    .join('\n\n---\n\n');
 }
 
 export const ops = [
@@ -51,6 +89,33 @@ export const ops = [
       for (let i = 0; i < pdf.numPages; i++) pages.push(await pageText(pdf, i));
       pdf.destroy?.();
       return { artifact: { text: pages.join('\n\n'), pageCount: pages.length, pages } };
+    },
+  },
+
+  {
+    id: 'convert.markdown', label: 'Extract as Markdown', group: 'convert', icon: 'textbox',
+    description: 'Extract the document text as Markdown — paragraphs preserved, page breaks as horizontal rules (---). Conservative (no heading guessing). Does not change the document.',
+    agentCallable: true, mutates: false,
+    params: {},
+    async run(doc) {
+      const pdf = await openForRender(await doc.toBytes());
+      const pages = [];
+      for (let i = 0; i < pdf.numPages; i++) pages.push(await pageText(pdf, i));
+      pdf.destroy?.();
+      return { artifact: { markdown: pagesToMarkdown(pages), pageCount: pages.length } };
+    },
+  },
+
+  {
+    id: 'convert.compareText', label: 'Compare text with another PDF', group: 'convert', icon: 'textbox',
+    description: 'Compare this document’s text against another PDF, page by page, into a Markdown summary of added/removed lines. Text-only (no visual diff). Does not change the document.',
+    agentCallable: true, mutates: false,
+    params: { otherBytes: { type: 'bytes', required: true } },
+    async run(doc, { otherBytes }) {
+      validatePdfBytes(otherBytes);
+      const a = await extractPages(await doc.toBytes());
+      const b = await extractPages(otherBytes);
+      return { artifact: { markdown: comparePagesText(a, b), pagesA: a.length, pagesB: b.length } };
     },
   },
 

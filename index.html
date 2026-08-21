@@ -1202,6 +1202,98 @@ const ops = [
   },
 
   {
+    id: 'pages.orient', label: 'Set orientation', group: 'page', icon: 'rotate',
+    description: 'Set the rotation of the given pages to an absolute angle (0, 90, 180, or 270), replacing their current rotation rather than adding to it.',
+    agentCallable: true,
+    params: {
+      pages: { type: 'array', required: true, items: { type: 'int', min: 0 }, minItems: 1 },
+      angle: { type: 'int', required: true, enum: [0, 90, 180, 270] },
+    },
+    run(doc, { pages, angle }) {
+      assertPages(pages, doc.pageCount());
+      const { degrees } = lib();
+      const ps = doc.pdf.getPages();
+      for (const i of new Set(pages)) ps[i].setRotation(degrees(angle));
+      return { doc };
+    },
+  },
+
+  {
+    id: 'pages.keepRange', label: 'Keep page range', group: 'page', icon: 'extract',
+    description: 'Keep only pages [from..to] inclusive (0-based) and drop the rest, into a fresh document (metadata carried).',
+    agentCallable: true,
+    params: {
+      from: { type: 'int', required: true, min: 0 },
+      to: { type: 'int', required: true, min: 0 },
+    },
+    async run(doc, { from, to }) {
+      const count = doc.pageCount();
+      if (from > to) throw new Error(`from (${from}) must be <= to (${to})`);
+      if (from < 0 || to >= count) throw new Error(`range ${from}..${to} out of bounds (document has ${count} page${count === 1 ? '' : 's'})`);
+      const order = [];
+      for (let i = from; i <= to; i++) order.push(i);
+      return { doc: await rebuildFromOrder(doc, order) };
+    },
+  },
+
+  {
+    id: 'pages.addMargin', label: 'Add margins', group: 'page', icon: 'scale',
+    description: 'Add a uniform margin (whitespace) around the visible area of the given pages by growing the page box; existing content is preserved in place. Decision: bigger page, content kept — not shrunk. Margin is added around the current CropBox, so it composes with an earlier crop.',
+    agentCallable: true,
+    params: {
+      margin: { type: 'number', required: true, min: 0, max: 400 },
+      pages: { type: 'array', items: { type: 'int', min: 0 } },
+    },
+    run(doc, { margin, pages }) {
+      const ps = doc.pdf.getPages();
+      const targets = (pages && pages.length) ? pages : [...Array(ps.length).keys()];
+      for (const i of new Set(targets)) {
+        if (i < 0 || i >= ps.length) throw new Error(`Page ${i} out of range`);
+        const b = ps[i].getCropBox();
+        const nx = b.x - margin, ny = b.y - margin, nw = b.width + 2 * margin, nh = b.height + 2 * margin;
+        ps[i].setMediaBox(nx, ny, nw, nh);
+        ps[i].setCropBox(nx, ny, nw, nh);
+      }
+      return { doc };
+    },
+  },
+
+  {
+    id: 'pages.nUp', label: 'N-up (pages per sheet)', group: 'page', icon: 'scale',
+    description: 'Place 2 or 4 source pages onto each output sheet, scaled to fit their cell, into a fresh document. Sheet size = the first source page; a small gutter is left around each.',
+    agentCallable: true,
+    params: { perSheet: { type: 'int', default: 2, enum: [2, 4] } },
+    async run(doc, { perSheet }) {
+      const { PDFDocument } = lib();
+      const out = await PDFDocument.create();
+      carryMetadata(doc.pdf, out);
+      const srcCount = doc.pageCount();
+      const cols = perSheet === 4 ? 2 : 1;
+      const rows = perSheet / cols;
+      const first = doc.pdf.getPage(0).getSize();
+      const cellW = first.width / cols, cellH = first.height / rows;
+      for (let start = 0; start < srcCount; start += perSheet) {
+        const sheet = out.addPage([first.width, first.height]);
+        for (let j = 0; j < perSheet && start + j < srcCount; j++) {
+          const srcPage = doc.pdf.getPage(start + j);
+          const { width: sw, height: sh } = srcPage.getSize();
+          // A genuinely blank page (e.g. an inserted blank) has no Contents; pdf-lib can't
+          // embed it (the error is deferred to save), so skip it → empty cell, no crash.
+          if (!srcPage.node.Contents()) continue;
+          const emb = await out.embedPage(srcPage);
+          const scale = Math.min(cellW / sw, cellH / sh) * 0.95; // small gutter
+          const col = j % cols, row = Math.floor(j / cols);
+          const x = col * cellW + (cellW - sw * scale) / 2;
+          const yTop = row * cellH + (cellH - sh * scale) / 2; // grid runs top→down
+          const y = first.height - yTop - sh * scale;          // PDF origin is bottom-left
+          sheet.drawPage(emb, { x, y, xScale: scale, yScale: scale });
+        }
+      }
+      return { doc: new SheafDoc(out, null) };
+    },
+  },
+
+  {
     id: 'pages.reverse', label: 'Reverse page order', group: 'page', icon: 'reorder',
     description: 'Reverse the order of all pages in the document.',
     agentCallable: true,
@@ -1390,6 +1482,31 @@ function winAnsiSafe(input) {
 return { winAnsiSafe };
 })();
 
+/* ops/_util.js */
+const __m_ops__util = (() => {
+// _util.js — small shared helpers for ops (kept DRY: hex-colour parsing + data-URL decode).
+// These were duplicated across annotate/marks/text/sign (hexToRgb) and convert/compress
+// (dataUrlToBytes); one definition each so a fix lands in one place.
+
+// "#rrggbb" (or "rrggbb") → [r,g,b] in 0..1; `fallback` if the string isn't a 6-hex colour.
+function hexToRgb(hex, fallback = [0, 0, 0]) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
+  if (!m) return fallback;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
+}
+
+// "data:<mime>;base64,XXXX" → Uint8Array of the decoded bytes.
+function dataUrlToBytes(dataUrl) {
+  const bin = atob(dataUrl.slice(dataUrl.indexOf(',') + 1));
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8;
+}
+
+return { hexToRgb, dataUrlToBytes };
+})();
+
 /* ops/marks.js */
 const __m_ops_marks = (() => {
 // ops/marks.js — page marks (pdf-lib): watermark, page numbers, Bates numbering,
@@ -1398,15 +1515,9 @@ const __m_ops_marks = (() => {
 
 const getEngine = __m_core_engines.getEngine;
 const winAnsiSafe = __m_ops_textsafe.winAnsiSafe;
+const hexToRgb = __m_ops__util.hexToRgb;
 
 function lib() { return getEngine('pdf-lib'); }
-
-function hexToRgb(hex, fallback = [0, 0, 0]) {
-  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
-  if (!m) return fallback;
-  const n = parseInt(m[1], 16);
-  return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
-}
 
 function resolvePages(doc, pages) {
   const count = doc.pageCount();
@@ -1583,15 +1694,9 @@ const __m_ops_annotate = (() => {
 
 const getEngine = __m_core_engines.getEngine;
 const winAnsiSafe = __m_ops_textsafe.winAnsiSafe;
+const hexToRgb = __m_ops__util.hexToRgb;
 
 function lib() { return getEngine('pdf-lib'); }
-
-function hexToRgb(hex, fallback = [0, 0, 0]) {
-  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
-  if (!m) return fallback;
-  const n = parseInt(m[1], 16);
-  return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
-}
 
 function pageOf(doc, i) {
   const count = doc.pageCount();
@@ -1825,9 +1930,9 @@ const __m_ops_text = (() => {
 
 const getEngine = __m_core_engines.getEngine;
 const winAnsiSafe = __m_ops_textsafe.winAnsiSafe;
+const hexToRgb = __m_ops__util.hexToRgb;
 
 function lib() { return getEngine('pdf-lib'); }
-function hexToRgb(hex, fb) { const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || '')); if (!m) return fb; const n = parseInt(m[1], 16); return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; }
 
 // Map a detected family + weight + slant to the closest Standard-14 face. These are
 // the fonts pdf-lib embeds without fontkit, so this works for any replacement text.
@@ -2096,6 +2201,7 @@ const __m_ops_sign = (() => {
 
 const getEngine = __m_core_engines.getEngine;
 const winAnsiSafe = __m_ops_textsafe.winAnsiSafe;
+const hexToRgb = __m_ops__util.hexToRgb;
 
 const ops = [
   {
@@ -2118,8 +2224,7 @@ const ops = [
       const { width: W, height: H } = page.getSize();
       const font = await doc.pdf.embedFont(StandardFonts.HelveticaOblique);
       const small = await doc.pdf.embedFont(StandardFonts.Helvetica);
-      const m = /^#?([0-9a-f]{6})$/i.exec(p.color);
-      const [r, g, b] = m ? [(parseInt(m[1], 16) >> 16 & 255) / 255, (parseInt(m[1], 16) >> 8 & 255) / 255, (parseInt(m[1], 16) & 255) / 255] : [0.1, 0.23, 0.56];
+      const [r, g, b] = hexToRgb(p.color, [0.1, 0.23, 0.56]);
       const x = p.x * W, yTop = H * (1 - p.y);
       page.drawText(winAnsiSafe(p.name), { x, y: yTop - p.fontSize, size: p.fontSize, font, color: rgb(r, g, b) });
       // Underline + optional date.
@@ -2253,12 +2358,50 @@ const __m_ops_convert = (() => {
 const openForRender = __m_core_render.openForRender;
 const pageText = __m_core_render.pageText;
 const getEngine = __m_core_engines.getEngine;
+const validatePdfBytes = __m_core_schema.validatePdfBytes;
+const dataUrlToBytes = __m_ops__util.dataUrlToBytes;
 
-function dataUrlToBytes(dataUrl) {
-  const bin = atob(dataUrl.slice(dataUrl.indexOf(',') + 1));
-  const u8 = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-  return u8;
+// Extract per-page text from raw PDF bytes (browser path — pdf.js).
+async function extractPages(bytes) {
+  const pdf = await openForRender(bytes);
+  const pages = [];
+  for (let i = 0; i < pdf.numPages; i++) pages.push(await pageText(pdf, i));
+  pdf.destroy?.();
+  return pages;
+}
+
+function nonBlankLines(t) { return String(t || '').split('\n').map(s => s.trim()).filter(Boolean); }
+
+// Pure, headless-testable: two per-page text arrays → a Markdown diff summary. Set-based
+// per-page line diff (a summary of added/removed lines, not a full LCS) — honest about
+// what it is. Text-only; the visual-diff half is out of scope (attended).
+function comparePagesText(pagesA, pagesB) {
+  const maxP = Math.max(pagesA.length, pagesB.length);
+  const out = [];
+  for (let i = 0; i < maxP; i++) {
+    const a = nonBlankLines(pagesA[i]), b = nonBlankLines(pagesB[i]);
+    const aSet = new Set(a), bSet = new Set(b);
+    const removed = a.filter(l => !bSet.has(l));
+    const added = b.filter(l => !aSet.has(l));
+    const parts = [`## Page ${i + 1}`];
+    if (!removed.length && !added.length) { parts.push('_No changes._'); }
+    else {
+      if (removed.length) parts.push('**Removed:**\n' + removed.map(l => `- ${l}`).join('\n'));
+      if (added.length) parts.push('**Added:**\n' + added.map(l => `+ ${l}`).join('\n'));
+    }
+    out.push(parts.join('\n\n'));
+  }
+  return out.join('\n\n---\n\n');
+}
+
+// Pure, headless-testable: per-page extracted text → Markdown. Conservative — no heading
+// synthesis (the text layer carries no reliable font-size signal), just normalized
+// paragraphs with page breaks as horizontal rules.
+function pagesToMarkdown(pages) {
+  return (pages || [])
+    .map(t => String(t || '').replace(/\r\n?/g, '\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim())
+    .filter(Boolean)
+    .join('\n\n---\n\n');
 }
 
 const ops = [
@@ -2302,6 +2445,33 @@ const ops = [
   },
 
   {
+    id: 'convert.markdown', label: 'Extract as Markdown', group: 'convert', icon: 'textbox',
+    description: 'Extract the document text as Markdown — paragraphs preserved, page breaks as horizontal rules (---). Conservative (no heading guessing). Does not change the document.',
+    agentCallable: true, mutates: false,
+    params: {},
+    async run(doc) {
+      const pdf = await openForRender(await doc.toBytes());
+      const pages = [];
+      for (let i = 0; i < pdf.numPages; i++) pages.push(await pageText(pdf, i));
+      pdf.destroy?.();
+      return { artifact: { markdown: pagesToMarkdown(pages), pageCount: pages.length } };
+    },
+  },
+
+  {
+    id: 'convert.compareText', label: 'Compare text with another PDF', group: 'convert', icon: 'textbox',
+    description: 'Compare this document’s text against another PDF, page by page, into a Markdown summary of added/removed lines. Text-only (no visual diff). Does not change the document.',
+    agentCallable: true, mutates: false,
+    params: { otherBytes: { type: 'bytes', required: true } },
+    async run(doc, { otherBytes }) {
+      validatePdfBytes(otherBytes);
+      const a = await extractPages(await doc.toBytes());
+      const b = await extractPages(otherBytes);
+      return { artifact: { markdown: comparePagesText(a, b), pagesA: a.length, pagesB: b.length } };
+    },
+  },
+
+  {
     id: 'convert.split', label: 'Split to files', group: 'convert', icon: 'extract',
     description: 'Split the document into one single-page PDF per page. Returns an artifact list of { name, bytes } for the UI to bundle into a zip. Does not change the document.',
     agentCallable: true, mutates: false,
@@ -2321,7 +2491,7 @@ const ops = [
   },
 ];
 
-return { ops };
+return { comparePagesText, pagesToMarkdown, ops };
 })();
 
 /* core/ocr.js */
@@ -2556,14 +2726,7 @@ const openForRender = __m_core_render.openForRender;
 const SheafDoc = __m_core_doc.SheafDoc;
 // one canonical metadata-carry (keywords/creator/producer included)
 const carryMetadata = __m_ops_pages.carryMetadata;
-
-function dataUrlToBytes(dataUrl) {
-  const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
-  const bin = atob(b64);
-  const u8 = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-  return u8;
-}
+const dataUrlToBytes = __m_ops__util.dataUrlToBytes;
 
 const ops = [
   {
@@ -4381,6 +4544,8 @@ function openConvertMenu() {
 
   const content = ({ close: c }) => { close = c; return el('div', { style: 'display:flex;flex-direction:column;gap:6px' }, [
     item('Extract text', 'Download the text layer as .txt', extractText),
+    item('Extract as Markdown', 'Download as .md — paragraphs + page breaks', extractMarkdown),
+    item('Compare text with another PDF', 'Per-page added/removed lines → .md', compareWith),
     item('Current page → image', 'Download this page as PNG or JPEG', currentPageImage),
     item('All pages → images (zip)', 'Render every page and download a .zip', allPagesZip),
     item('Split to single-page PDFs (zip)', 'One PDF per page, downloaded as a .zip', splitFiles),
@@ -4401,6 +4566,16 @@ async function extractText() {
     downloadText(text, `${baseName()}.txt`);
     toast('Text extracted', 'ok');
   } catch (e) { toast('Could not extract text', 'err', { detail: e.message }); }
+}
+
+async function extractMarkdown() {
+  try {
+    const res = await dispatch('convert.markdown', {}, { source: 'ui' });
+    const md = res.artifact?.markdown || '';
+    if (!md.trim()) return toast('No extractable text (try OCR for a scan)', 'warn');
+    downloadText(md, `${baseName()}.md`);
+    toast('Markdown extracted', 'ok');
+  } catch (e) { toast('Could not extract Markdown', 'err', { detail: e.message }); }
 }
 
 async function currentPageImage() {
@@ -4445,6 +4620,23 @@ async function splitFiles() {
     toast(`Split into ${n} files`, 'ok');
   } catch (e) { toast('Split failed', 'err', { detail: e.message }); }
   finally { note.remove(); }
+}
+
+function compareWith() {
+  const input = el('input', { type: 'file', accept: 'application/pdf,.pdf' });
+  input.onchange = async () => {
+    const f = input.files?.[0];
+    if (!f) return;
+    const note = busy('Comparing…');
+    try {
+      const otherBytes = new Uint8Array(await f.arrayBuffer());
+      const res = await dispatch('convert.compareText', { otherBytes }, { source: 'ui' });
+      downloadText(res.artifact.markdown, `${baseName()}-diff.md`);
+      toast('Comparison saved', 'ok');
+    } catch (e) { toast('Compare failed', 'err', { detail: e.message }); }
+    finally { note.remove(); }
+  };
+  input.click();
 }
 
 function imagesToPdf() {
@@ -5913,6 +6105,10 @@ function buildPageOps() {
     make('scale',  'scale',  'Scale pages…',        onScale),
     make('merge',  'merge',  'Merge a PDF in…',     mergePdf),
     make('reorder','reorder','Reverse page order',   () => dispatch('pages.reverse', {})),
+    make('rotate', 'orient', 'Set orientation…',      onOrient),
+    make('extract','keeprange','Keep page range…',    onKeepRange),
+    make('scale', 'margin',  'Add margins…',          onAddMargin),
+    make('scale', 'nup',     'N-up (2/4 per sheet)…', onNUp),
     make('mark',   'mark',   'Add marks…',          openMarksMenu),
     make('forms',  'forms',  'Edit form fields…',   openFormsDialog),
     make('ocr',    'ocr',    'OCR text layer…',     openOcrMenu),
@@ -5986,6 +6182,38 @@ async function onInsert() {
   const at = Math.min(state.view.pageIndex + 1, state.doc.pageCount());
   await dispatch('pages.insertBlank', { at });
   toast(`Inserted a blank page at ${at + 1}`, 'ok');
+}
+
+async function onOrient() {
+  const v = await formModal('Set orientation', [
+    { name: 'angle', label: 'Rotation', type: 'select', value: '0',
+      options: ['0', '90', '180', '270'].map(o => ({ value: o, label: `${o}°` })) },
+  ]);
+  if (v) dispatch('pages.orient', { pages: targetPages(), angle: Number(v.angle) });
+}
+
+async function onKeepRange() {
+  const n = state.doc.pageCount();
+  const v = await formModal('Keep page range', [
+    { name: 'from', label: `First page to keep (1–${n})`, type: 'number', value: 1, min: 1, max: n },
+    { name: 'to', label: `Last page to keep (1–${n})`, type: 'number', value: n, min: 1, max: n },
+  ]);
+  if (v) dispatch('pages.keepRange', { from: (v.from | 0) - 1, to: (v.to | 0) - 1 });
+}
+
+async function onNUp() {
+  const v = await formModal('N-up (pages per sheet)', [
+    { name: 'perSheet', label: 'Pages per sheet', type: 'select', value: '2',
+      options: [{ value: '2', label: '2 per sheet' }, { value: '4', label: '4 per sheet' }] },
+  ]);
+  if (v) dispatch('pages.nUp', { perSheet: Number(v.perSheet) });
+}
+
+async function onAddMargin() {
+  const v = await formModal('Add margins', [
+    { name: 'margin', label: 'Margin (pt) added on every side', type: 'number', value: 36, min: 0, max: 400 },
+  ]);
+  if (v && v.margin) dispatch('pages.addMargin', { margin: v.margin, pages: targetPages() });
 }
 
 async function onScale() {

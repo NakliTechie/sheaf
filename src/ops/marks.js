@@ -4,15 +4,9 @@
 
 import { getEngine } from '../core/engines.js';
 import { winAnsiSafe } from './textsafe.js';
+import { hexToRgb } from './_util.js';
 
 function lib() { return getEngine('pdf-lib'); }
-
-function hexToRgb(hex, fallback = [0, 0, 0]) {
-  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
-  if (!m) return fallback;
-  const n = parseInt(m[1], 16);
-  return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
-}
 
 function resolvePages(doc, pages) {
   const count = doc.pageCount();
