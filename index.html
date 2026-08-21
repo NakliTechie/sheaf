@@ -1070,6 +1070,7 @@ const validatePdfBytes = __m_core_schema.validatePdfBytes;
 
 function lib() { return getEngine('pdf-lib'); }
 function norm360(a) { return ((a % 360) + 360) % 360; }
+function clamp01(v) { return Math.max(0, Math.min(1, v)); }
 
 function assertPages(indices, count) {
   for (const i of indices) {
@@ -1124,6 +1125,32 @@ const ops = [
       for (const i of pages) {
         const cur = ps[i].getRotation().angle;
         ps[i].setRotation(degrees(norm360(cur + angle)));
+      }
+      return { doc };
+    },
+  },
+
+  {
+    id: 'pages.crop', label: 'Crop pages', group: 'page', icon: 'crop',
+    description: 'Crop the given pages to a rectangle, given as a normalized region (top-left origin, 0..1). Sets each page CropBox — visible-area only; no content is removed, so the crop is reversible by cropping to the full page.',
+    agentCallable: true,
+    params: {
+      pages: { type: 'array', required: true, items: { type: 'int', min: 0 }, minItems: 1 },
+      x: { type: 'number', required: true, min: 0, max: 1 },
+      y: { type: 'number', required: true, min: 0, max: 1 },
+      w: { type: 'number', required: true, min: 0, max: 1 },
+      h: { type: 'number', required: true, min: 0, max: 1 },
+    },
+    run(doc, { pages, x, y, w, h }) {
+      assertPages(pages, doc.pageCount());
+      const x0 = clamp01(x), y0 = clamp01(y);
+      const ww = clamp01(Math.min(w, 1 - x0)), hh = clamp01(Math.min(h, 1 - y0));
+      if (ww <= 0 || hh <= 0) throw new Error('Crop rectangle must have positive width and height');
+      const ps = doc.pdf.getPages();
+      for (const i of pages) {
+        const { width: W, height: H } = ps[i].getSize();
+        // Normalized top-left rect → PDF CropBox (bottom-left origin, page user space).
+        ps[i].setCropBox(x0 * W, H * (1 - (y0 + hh)), ww * W, hh * H);
       }
       return { doc };
     },
@@ -3430,6 +3457,7 @@ const P = {
   insert:  '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M12 8v8M8 12h8"/>',
   extract: '<path d="M9 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-3"/><path d="M14 3h6v6M20 3l-8 8"/>',
   scale:   '<path d="M4 4h7v7H4z"/><path d="M14 14h6v6h-6z"/><path d="M11 4h9v9"/>',
+  crop:    '<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M2 6h14a2 2 0 0 1 2 2v14"/>',
   merge:   '<path d="M7 3v6a4 4 0 0 0 4 4h2a4 4 0 0 1 4 4v4"/><path d="M14 18l3 3 3-3M4 6l3-3 3 3"/>',
   info:    '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
   settings:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H1a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 2.6 7a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H7a1.6 1.6 0 0 0 1-1.5V1a2 2 0 1 1 4 0v.1A1.6 1.6 0 0 0 17 2.6a1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V7a1.6 1.6 0 0 0 1.5 1H23a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/>',
@@ -5004,7 +5032,7 @@ const formModal = __m_ui_modal.formModal;
 const chooseSignature = __m_ui_signature.chooseSignature;
 const editTextAt = __m_ui_spanedit.editTextAt;
 
-const DRAG_TOOLS = new Set(['highlight', 'rect', 'line', 'pencil', 'whiteout', 'redact']);
+const DRAG_TOOLS = new Set(['highlight', 'rect', 'line', 'pencil', 'whiteout', 'redact', 'crop']);
 const ALL_TOOLS = new Set([...DRAG_TOOLS, 'text', 'sign', 'edittext']);
 
 const toolSettings = { color: '#ff3b30', highlightColor: '#ffe14d', thickness: 2 };
@@ -5097,11 +5125,12 @@ function drawPreview() {
     return;
   }
   if (!cur) return;
-  if (active === 'highlight' || active === 'rect' || active === 'whiteout' || active === 'redact') {
+  if (active === 'highlight' || active === 'rect' || active === 'whiteout' || active === 'redact' || active === 'crop') {
     const x = Math.min(start.x, cur.x), y = Math.min(start.y, cur.y), w = Math.abs(cur.x - start.x), h = Math.abs(cur.y - start.y);
     const style = active === 'highlight' ? `background:${toolSettings.highlightColor};opacity:.4`
       : active === 'whiteout' ? `background:#fff;border:1px dashed #999`
       : active === 'redact' ? `background:#000`
+      : active === 'crop' ? `border:2px dashed var(--accent);box-shadow:0 0 0 9999px rgba(0,0,0,.35)`
       : `border:2px solid ${toolSettings.color}`;
     preview.innerHTML = `<div style="position:absolute;left:${x * 100}%;top:${y * 100}%;width:${w * 100}%;height:${h * 100}%;${style}"></div>`;
   } else if (active === 'line') {
@@ -5137,6 +5166,11 @@ function onUp() {
     const x = Math.min(start.x, cur.x), y = Math.min(start.y, cur.y), w = Math.abs(cur.x - start.x), h = Math.abs(cur.y - start.y);
     if (w < 0.005 || h < 0.005) return;
     dispatch('redact.region', { page, x, y, w, h }); // true removal + black box
+  } else if (active === 'crop') {
+    if (!cur) return;
+    const x = Math.min(start.x, cur.x), y = Math.min(start.y, cur.y), w = Math.abs(cur.x - start.x), h = Math.abs(cur.y - start.y);
+    if (w < 0.01 || h < 0.01) return; // ignore stray clicks — a crop needs real area
+    dispatch('pages.crop', { pages: [page], x, y, w, h }); // set CropBox (reversible; no content removed)
   }
 }
 
@@ -5664,6 +5698,7 @@ function render(version) {
       toolBtn('edittext', 'edittext', 'Edit text (click a line)'),
       toolBtn('eraser', 'whiteout', 'Whiteout & retype'),
       toolBtn('redact', 'redact', 'Redact (true removal)'),
+      toolBtn('crop', 'crop', 'Crop (draw the keep area)'),
       toolBtn('sign', 'sign', 'Sign'),
       el('input', { type: 'color', value: toolSettings.color, title: 'Annotation colour', class: 'color-swatch',
         onInput: (e) => { toolSettings.color = e.target.value; } }),
@@ -6263,6 +6298,7 @@ function wireKeyboard() {
     .register('e', () => setTool('edittext'), { context: 'viewer', label: 'Edit text' })
     .register('w', () => setTool('whiteout'), { context: 'viewer', label: 'Whiteout' })
     .register('x', () => setTool('redact'), { context: 'viewer', label: 'Redact' })
+    .register('c', () => setTool('crop'), { context: 'viewer', label: 'Crop' })
     .register('escape', () => setTool(null), { context: 'viewer' })
     .attach(window);
 }
