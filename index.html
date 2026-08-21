@@ -2252,6 +2252,7 @@ const __m_ops_convert = (() => {
 
 const openForRender = __m_core_render.openForRender;
 const pageText = __m_core_render.pageText;
+const getEngine = __m_core_engines.getEngine;
 
 function dataUrlToBytes(dataUrl) {
   const bin = atob(dataUrl.slice(dataUrl.indexOf(',') + 1));
@@ -2297,6 +2298,25 @@ const ops = [
       for (let i = 0; i < pdf.numPages; i++) pages.push(await pageText(pdf, i));
       pdf.destroy?.();
       return { artifact: { text: pages.join('\n\n'), pageCount: pages.length, pages } };
+    },
+  },
+
+  {
+    id: 'convert.split', label: 'Split to files', group: 'convert', icon: 'extract',
+    description: 'Split the document into one single-page PDF per page. Returns an artifact list of { name, bytes } for the UI to bundle into a zip. Does not change the document.',
+    agentCallable: true, mutates: false,
+    params: {},
+    async run(doc) {
+      const { PDFDocument } = getEngine('pdf-lib');
+      const n = doc.pageCount();
+      const files = [];
+      for (let i = 0; i < n; i++) {
+        const out = await PDFDocument.create();
+        const [pg] = await out.copyPages(doc.pdf, [i]);
+        out.addPage(pg);
+        files.push({ name: `page-${String(i + 1).padStart(3, '0')}.pdf`, bytes: await out.save({ updateMetadata: false }) });
+      }
+      return { artifact: { files, count: n } };
     },
   },
 ];
@@ -4363,6 +4383,7 @@ function openConvertMenu() {
     item('Extract text', 'Download the text layer as .txt', extractText),
     item('Current page → image', 'Download this page as PNG or JPEG', currentPageImage),
     item('All pages → images (zip)', 'Render every page and download a .zip', allPagesZip),
+    item('Split to single-page PDFs (zip)', 'One PDF per page, downloaded as a .zip', splitFiles),
     item('Images → PDF', 'Append PNG/JPEG images as new pages', imagesToPdf),
     el('hr', { style: 'border:none;border-top:1px solid var(--panel-border);margin:4px 0' }),
     item('Compress (flatten to images)', 'Shrink scanned/image PDFs — lossy, text becomes non-selectable', compress),
@@ -4409,6 +4430,20 @@ async function allPagesZip() {
     downloadBytesAs(makeZip(files), `${baseName()}-pages.zip`, 'application/zip');
     toast(`Exported ${n} pages`, 'ok');
   } catch (e) { toast('Export failed', 'err', { detail: e.message }); }
+  finally { note.remove(); }
+}
+
+async function splitFiles() {
+  const n = state.doc.pageCount();
+  if (n < 2) return toast('Nothing to split — the document has one page', 'warn');
+  if (!await confirmModal(`Split into ${n} single-page PDFs and download a zip?`, { title: 'Split to files', okLabel: 'Split' })) return;
+  const note = busy('Splitting…');
+  try {
+    const res = await dispatch('convert.split', {}, { source: 'ui' });
+    const files = res.artifact.files.map(f => ({ name: `${baseName()}-${f.name}`, bytes: f.bytes }));
+    downloadBytesAs(makeZip(files), `${baseName()}-split.zip`, 'application/zip');
+    toast(`Split into ${n} files`, 'ok');
+  } catch (e) { toast('Split failed', 'err', { detail: e.message }); }
   finally { note.remove(); }
 }
 

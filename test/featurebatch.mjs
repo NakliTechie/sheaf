@@ -7,6 +7,7 @@ import { registerEngine } from '../src/core/engines.js';
 import { registerOps } from '../src/ops/index.js';
 import { dispatch } from '../src/core/runner.js';
 import { state } from '../src/core/state.js';
+import { makeZip } from '../src/core/zip.js';
 
 let passed = 0, failed = 0;
 const ok = (n, c) => { c ? passed++ : failed++; console.log(`  ${c ? '✓' : '✗'} ${n}`); };
@@ -51,6 +52,22 @@ async function main() {
   let borderThrew = false;
   try { await dispatch('marks.border', { pages: [9] }); } catch { borderThrew = true; }
   ok('border on out-of-range page rejected', borderThrew);
+
+  console.log('\nFB-4 — convert.split into single-page PDFs + zip');
+  await openWidths([100, 200, 300]);
+  const res = await dispatch('convert.split', {}, { source: 'test' });
+  const files = res.artifact?.files || [];
+  ok('one file per page (3)', files.length === 3 && res.artifact.count === 3);
+  const counts = [];
+  for (const f of files) counts.push((await PDFDocument.load(f.bytes)).getPageCount());
+  ok('every split file is a valid 1-page PDF', counts.every(c => c === 1));
+  // widths preserved per split file (page i keeps its width)
+  const w0 = Math.round((await PDFDocument.load(files[0].bytes)).getPage(0).getWidth());
+  const w2 = Math.round((await PDFDocument.load(files[2].bytes)).getPage(0).getWidth());
+  ok('split files keep per-page geometry (100 & 300)', w0 === 100 && w2 === 300);
+  const zip = makeZip(files);
+  ok('makeZip bundles them (valid zip signature, non-empty)', zip.length > 0 && zip[0] === 0x50 && zip[1] === 0x4b);
+  ok('splitting the doc did not mutate it (still 3 pages open)', state.doc.pageCount() === 3);
 
   console.log(`\n${failed === 0 ? 'PASS' : 'FAIL'} — ${passed} passed, ${failed} failed\n`);
   if (failed) process.exit(1);
