@@ -11,7 +11,7 @@ import { formModal } from './modal.js';
 import { chooseSignature } from './signature.js';
 import { editTextAt } from './spanedit.js';
 
-const DRAG_TOOLS = new Set(['highlight', 'rect', 'line', 'pencil', 'whiteout', 'redact']);
+const DRAG_TOOLS = new Set(['highlight', 'rect', 'line', 'pencil', 'whiteout', 'redact', 'crop']);
 const ALL_TOOLS = new Set([...DRAG_TOOLS, 'text', 'sign', 'edittext']);
 
 export const toolSettings = { color: '#ff3b30', highlightColor: '#ffe14d', thickness: 2 };
@@ -104,11 +104,12 @@ function drawPreview() {
     return;
   }
   if (!cur) return;
-  if (active === 'highlight' || active === 'rect' || active === 'whiteout' || active === 'redact') {
+  if (active === 'highlight' || active === 'rect' || active === 'whiteout' || active === 'redact' || active === 'crop') {
     const x = Math.min(start.x, cur.x), y = Math.min(start.y, cur.y), w = Math.abs(cur.x - start.x), h = Math.abs(cur.y - start.y);
     const style = active === 'highlight' ? `background:${toolSettings.highlightColor};opacity:.4`
       : active === 'whiteout' ? `background:#fff;border:1px dashed #999`
       : active === 'redact' ? `background:#000`
+      : active === 'crop' ? `border:2px dashed var(--accent);box-shadow:0 0 0 9999px rgba(0,0,0,.35)`
       : `border:2px solid ${toolSettings.color}`;
     preview.innerHTML = `<div style="position:absolute;left:${x * 100}%;top:${y * 100}%;width:${w * 100}%;height:${h * 100}%;${style}"></div>`;
   } else if (active === 'line') {
@@ -144,6 +145,11 @@ function onUp() {
     const x = Math.min(start.x, cur.x), y = Math.min(start.y, cur.y), w = Math.abs(cur.x - start.x), h = Math.abs(cur.y - start.y);
     if (w < 0.005 || h < 0.005) return;
     dispatch('redact.region', { page, x, y, w, h }); // true removal + black box
+  } else if (active === 'crop') {
+    if (!cur) return;
+    const x = Math.min(start.x, cur.x), y = Math.min(start.y, cur.y), w = Math.abs(cur.x - start.x), h = Math.abs(cur.y - start.y);
+    if (w < 0.01 || h < 0.01) return; // ignore stray clicks — a crop needs real area
+    dispatch('pages.crop', { pages: [page], x, y, w, h }); // set CropBox (reversible; no content removed)
   }
 }
 

@@ -116,6 +116,7 @@ function render(version) {
       toolBtn('edittext', 'edittext', 'Edit text (click a line)'),
       toolBtn('eraser', 'whiteout', 'Whiteout & retype'),
       toolBtn('redact', 'redact', 'Redact (true removal)'),
+      toolBtn('crop', 'crop', 'Crop (draw the keep area)'),
       toolBtn('sign', 'sign', 'Sign'),
       el('input', { type: 'color', value: toolSettings.color, title: 'Annotation colour', class: 'color-swatch',
         onInput: (e) => { toolSettings.color = e.target.value; } }),

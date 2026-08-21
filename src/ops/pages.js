@@ -12,6 +12,7 @@ import { validatePdfBytes } from '../core/schema.js';
 
 function lib() { return getEngine('pdf-lib'); }
 function norm360(a) { return ((a % 360) + 360) % 360; }
+function clamp01(v) { return Math.max(0, Math.min(1, v)); }
 
 function assertPages(indices, count) {
   for (const i of indices) {
@@ -66,6 +67,32 @@ export const ops = [
       for (const i of pages) {
         const cur = ps[i].getRotation().angle;
         ps[i].setRotation(degrees(norm360(cur + angle)));
+      }
+      return { doc };
+    },
+  },
+
+  {
+    id: 'pages.crop', label: 'Crop pages', group: 'page', icon: 'crop',
+    description: 'Crop the given pages to a rectangle, given as a normalized region (top-left origin, 0..1). Sets each page CropBox — visible-area only; no content is removed, so the crop is reversible by cropping to the full page.',
+    agentCallable: true,
+    params: {
+      pages: { type: 'array', required: true, items: { type: 'int', min: 0 }, minItems: 1 },
+      x: { type: 'number', required: true, min: 0, max: 1 },
+      y: { type: 'number', required: true, min: 0, max: 1 },
+      w: { type: 'number', required: true, min: 0, max: 1 },
+      h: { type: 'number', required: true, min: 0, max: 1 },
+    },
+    run(doc, { pages, x, y, w, h }) {
+      assertPages(pages, doc.pageCount());
+      const x0 = clamp01(x), y0 = clamp01(y);
+      const ww = clamp01(Math.min(w, 1 - x0)), hh = clamp01(Math.min(h, 1 - y0));
+      if (ww <= 0 || hh <= 0) throw new Error('Crop rectangle must have positive width and height');
+      const ps = doc.pdf.getPages();
+      for (const i of pages) {
+        const { width: W, height: H } = ps[i].getSize();
+        // Normalized top-left rect → PDF CropBox (bottom-left origin, page user space).
+        ps[i].setCropBox(x0 * W, H * (1 - (y0 + hh)), ww * W, hh * H);
       }
       return { doc };
     },
