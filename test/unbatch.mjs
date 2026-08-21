@@ -52,6 +52,29 @@ async function main() {
   ok('origin shifted by -margin (x=-20)', Math.round(mb.x) === -20);
   ok('still one page, reloadable', (await reload()).getPageCount() === 1);
 
+  console.log('\nUB-5 — pages.nUp');
+  // Pages must have content to be embeddable; draw text on each.
+  const openContent = async (count) => {
+    const d = await PDFDocument.create();
+    const f = await d.embedFont(PDFLib.StandardFonts.Helvetica);
+    for (let i = 0; i < count; i++) d.addPage([200, 300]).drawText(`page ${i}`, { x: 20, y: 260, size: 14, font: f });
+    await dispatch('open.bytes', { bytes: await d.save({ updateMetadata: false }) });
+  };
+  await openContent(4);
+  await dispatch('pages.nUp', { perSheet: 2 });
+  ok('4 pages, 2-up → 2 sheets', (await reload()).getPageCount() === 2);
+  await openContent(4);
+  await dispatch('pages.nUp', { perSheet: 4 });
+  ok('4 pages, 4-up → 1 sheet', (await reload()).getPageCount() === 1);
+  await openContent(3);
+  await dispatch('pages.nUp', { perSheet: 2 });
+  ok('3 pages, 2-up → 2 sheets (last half-full)', (await reload()).getPageCount() === 2);
+  ok('non-cardinal perSheet rejected', await rejects('pages.nUp', { perSheet: 3 }));
+  // A blank (no-content) source page is skipped gracefully, not fatal.
+  await openWidths([200, 200]);
+  await dispatch('pages.nUp', { perSheet: 2 });
+  ok('blank source pages → still 1 sheet, no crash', (await reload()).getPageCount() === 1);
+
   console.log(`\n${failed === 0 ? 'PASS' : 'FAIL'} — ${passed} passed, ${failed} failed\n`);
   if (failed) process.exit(1);
 }

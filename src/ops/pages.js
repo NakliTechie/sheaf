@@ -188,6 +188,41 @@ export const ops = [
   },
 
   {
+    id: 'pages.nUp', label: 'N-up (pages per sheet)', group: 'page', icon: 'scale',
+    description: 'Place 2 or 4 source pages onto each output sheet, scaled to fit their cell, into a fresh document. Sheet size = the first source page; a small gutter is left around each.',
+    agentCallable: true,
+    params: { perSheet: { type: 'int', default: 2, enum: [2, 4] } },
+    async run(doc, { perSheet }) {
+      const { PDFDocument } = lib();
+      const out = await PDFDocument.create();
+      carryMetadata(doc.pdf, out);
+      const srcCount = doc.pageCount();
+      const cols = perSheet === 4 ? 2 : 1;
+      const rows = perSheet / cols;
+      const first = doc.pdf.getPage(0).getSize();
+      const cellW = first.width / cols, cellH = first.height / rows;
+      for (let start = 0; start < srcCount; start += perSheet) {
+        const sheet = out.addPage([first.width, first.height]);
+        for (let j = 0; j < perSheet && start + j < srcCount; j++) {
+          const srcPage = doc.pdf.getPage(start + j);
+          const { width: sw, height: sh } = srcPage.getSize();
+          // A genuinely blank page (e.g. an inserted blank) has no Contents; pdf-lib can't
+          // embed it (the error is deferred to save), so skip it → empty cell, no crash.
+          if (!srcPage.node.Contents()) continue;
+          const emb = await out.embedPage(srcPage);
+          const scale = Math.min(cellW / sw, cellH / sh) * 0.95; // small gutter
+          const col = j % cols, row = Math.floor(j / cols);
+          const x = col * cellW + (cellW - sw * scale) / 2;
+          const yTop = row * cellH + (cellH - sh * scale) / 2; // grid runs top→down
+          const y = first.height - yTop - sh * scale;          // PDF origin is bottom-left
+          sheet.drawPage(emb, { x, y, xScale: scale, yScale: scale });
+        }
+      }
+      return { doc: new SheafDoc(out, null) };
+    },
+  },
+
+  {
     id: 'pages.reverse', label: 'Reverse page order', group: 'page', icon: 'reorder',
     description: 'Reverse the order of all pages in the document.',
     agentCallable: true,

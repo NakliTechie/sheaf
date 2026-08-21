@@ -156,6 +156,7 @@ function buildPageOps() {
     make('rotate', 'orient', 'Set orientation…',      onOrient),
     make('extract','keeprange','Keep page range…',    onKeepRange),
     make('scale', 'margin',  'Add margins…',          onAddMargin),
+    make('scale', 'nup',     'N-up (2/4 per sheet)…', onNUp),
     make('mark',   'mark',   'Add marks…',          openMarksMenu),
     make('forms',  'forms',  'Edit form fields…',   openFormsDialog),
     make('ocr',    'ocr',    'OCR text layer…',     openOcrMenu),
@@ -246,6 +247,14 @@ async function onKeepRange() {
     { name: 'to', label: `Last page to keep (1–${n})`, type: 'number', value: n, min: 1, max: n },
   ]);
   if (v) dispatch('pages.keepRange', { from: (v.from | 0) - 1, to: (v.to | 0) - 1 });
+}
+
+async function onNUp() {
+  const v = await formModal('N-up (pages per sheet)', [
+    { name: 'perSheet', label: 'Pages per sheet', type: 'select', value: '2',
+      options: [{ value: '2', label: '2 per sheet' }, { value: '4', label: '4 per sheet' }] },
+  ]);
+  if (v) dispatch('pages.nUp', { perSheet: Number(v.perSheet) });
 }
 
 async function onAddMargin() {
