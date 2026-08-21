@@ -9,7 +9,7 @@ import { registerEngine } from '../src/core/engines.js';
 import { registerOps } from '../src/ops/index.js';
 import { dispatch } from '../src/core/runner.js';
 import { state } from '../src/core/state.js';
-import { pagesToMarkdown } from '../src/ops/convert.js';
+import { pagesToMarkdown, comparePagesText } from '../src/ops/convert.js';
 
 let passed = 0, failed = 0;
 const ok = (n, c) => { c ? passed++ : failed++; console.log(`  ${c ? '✓' : '✗'} ${n}`); };
@@ -56,6 +56,17 @@ async function main() {
   ok('empty/whitespace pages dropped', pagesToMarkdown(['', 'keep', '   ']) === 'keep');
   ok('single page → no separator', pagesToMarkdown(['only']) === 'only');
   ok('null-safe', pagesToMarkdown(null) === '' && pagesToMarkdown([null, 'z']) === 'z');
+
+  console.log('\nconvert.compareText — comparePagesText diff (UB-7)');
+  const diff = comparePagesText(['a\nb', 'same'], ['a\nc', 'same']);
+  ok('page 1 reports removed line b', diff.includes('- b'));
+  ok('page 1 reports added line c', diff.includes('+ c'));
+  ok('page 2 reports no changes', diff.includes('_No changes._'));
+  ok('page headers present for both pages', diff.includes('## Page 1') && diff.includes('## Page 2'));
+  const uneven = comparePagesText(['x'], []);
+  ok('extra page in A shown as removed', uneven.includes('- x'));
+  const identical = comparePagesText(['p', 'q'], ['p', 'q']);
+  ok('identical docs → all pages no changes', !identical.includes('Removed') && !identical.includes('Added'));
 
   console.log(`\n${failed === 0 ? 'PASS' : 'FAIL'} — ${passed} passed, ${failed} failed\n`);
   if (failed) process.exit(1);

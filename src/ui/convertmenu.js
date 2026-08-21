@@ -21,6 +21,7 @@ export function openConvertMenu() {
   const content = ({ close: c }) => { close = c; return el('div', { style: 'display:flex;flex-direction:column;gap:6px' }, [
     item('Extract text', 'Download the text layer as .txt', extractText),
     item('Extract as Markdown', 'Download as .md — paragraphs + page breaks', extractMarkdown),
+    item('Compare text with another PDF', 'Per-page added/removed lines → .md', compareWith),
     item('Current page → image', 'Download this page as PNG or JPEG', currentPageImage),
     item('All pages → images (zip)', 'Render every page and download a .zip', allPagesZip),
     item('Split to single-page PDFs (zip)', 'One PDF per page, downloaded as a .zip', splitFiles),
@@ -95,6 +96,23 @@ async function splitFiles() {
     toast(`Split into ${n} files`, 'ok');
   } catch (e) { toast('Split failed', 'err', { detail: e.message }); }
   finally { note.remove(); }
+}
+
+function compareWith() {
+  const input = el('input', { type: 'file', accept: 'application/pdf,.pdf' });
+  input.onchange = async () => {
+    const f = input.files?.[0];
+    if (!f) return;
+    const note = busy('Comparing…');
+    try {
+      const otherBytes = new Uint8Array(await f.arrayBuffer());
+      const res = await dispatch('convert.compareText', { otherBytes }, { source: 'ui' });
+      downloadText(res.artifact.markdown, `${baseName()}-diff.md`);
+      toast('Comparison saved', 'ok');
+    } catch (e) { toast('Compare failed', 'err', { detail: e.message }); }
+    finally { note.remove(); }
+  };
+  input.click();
 }
 
 function imagesToPdf() {
