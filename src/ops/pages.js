@@ -131,6 +131,41 @@ export const ops = [
   },
 
   {
+    id: 'pages.orient', label: 'Set orientation', group: 'page', icon: 'rotate',
+    description: 'Set the rotation of the given pages to an absolute angle (0, 90, 180, or 270), replacing their current rotation rather than adding to it.',
+    agentCallable: true,
+    params: {
+      pages: { type: 'array', required: true, items: { type: 'int', min: 0 }, minItems: 1 },
+      angle: { type: 'int', required: true, enum: [0, 90, 180, 270] },
+    },
+    run(doc, { pages, angle }) {
+      assertPages(pages, doc.pageCount());
+      const { degrees } = lib();
+      const ps = doc.pdf.getPages();
+      for (const i of new Set(pages)) ps[i].setRotation(degrees(angle));
+      return { doc };
+    },
+  },
+
+  {
+    id: 'pages.keepRange', label: 'Keep page range', group: 'page', icon: 'extract',
+    description: 'Keep only pages [from..to] inclusive (0-based) and drop the rest, into a fresh document (metadata carried).',
+    agentCallable: true,
+    params: {
+      from: { type: 'int', required: true, min: 0 },
+      to: { type: 'int', required: true, min: 0 },
+    },
+    async run(doc, { from, to }) {
+      const count = doc.pageCount();
+      if (from > to) throw new Error(`from (${from}) must be <= to (${to})`);
+      if (from < 0 || to >= count) throw new Error(`range ${from}..${to} out of bounds (document has ${count} page${count === 1 ? '' : 's'})`);
+      const order = [];
+      for (let i = from; i <= to; i++) order.push(i);
+      return { doc: await rebuildFromOrder(doc, order) };
+    },
+  },
+
+  {
     id: 'pages.reverse', label: 'Reverse page order', group: 'page', icon: 'reorder',
     description: 'Reverse the order of all pages in the document.',
     agentCallable: true,

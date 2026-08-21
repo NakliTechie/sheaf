@@ -1202,6 +1202,41 @@ const ops = [
   },
 
   {
+    id: 'pages.orient', label: 'Set orientation', group: 'page', icon: 'rotate',
+    description: 'Set the rotation of the given pages to an absolute angle (0, 90, 180, or 270), replacing their current rotation rather than adding to it.',
+    agentCallable: true,
+    params: {
+      pages: { type: 'array', required: true, items: { type: 'int', min: 0 }, minItems: 1 },
+      angle: { type: 'int', required: true, enum: [0, 90, 180, 270] },
+    },
+    run(doc, { pages, angle }) {
+      assertPages(pages, doc.pageCount());
+      const { degrees } = lib();
+      const ps = doc.pdf.getPages();
+      for (const i of new Set(pages)) ps[i].setRotation(degrees(angle));
+      return { doc };
+    },
+  },
+
+  {
+    id: 'pages.keepRange', label: 'Keep page range', group: 'page', icon: 'extract',
+    description: 'Keep only pages [from..to] inclusive (0-based) and drop the rest, into a fresh document (metadata carried).',
+    agentCallable: true,
+    params: {
+      from: { type: 'int', required: true, min: 0 },
+      to: { type: 'int', required: true, min: 0 },
+    },
+    async run(doc, { from, to }) {
+      const count = doc.pageCount();
+      if (from > to) throw new Error(`from (${from}) must be <= to (${to})`);
+      if (from < 0 || to >= count) throw new Error(`range ${from}..${to} out of bounds (document has ${count} page${count === 1 ? '' : 's'})`);
+      const order = [];
+      for (let i = from; i <= to; i++) order.push(i);
+      return { doc: await rebuildFromOrder(doc, order) };
+    },
+  },
+
+  {
     id: 'pages.reverse', label: 'Reverse page order', group: 'page', icon: 'reorder',
     description: 'Reverse the order of all pages in the document.',
     agentCallable: true,
@@ -5913,6 +5948,8 @@ function buildPageOps() {
     make('scale',  'scale',  'Scale pages…',        onScale),
     make('merge',  'merge',  'Merge a PDF in…',     mergePdf),
     make('reorder','reorder','Reverse page order',   () => dispatch('pages.reverse', {})),
+    make('rotate', 'orient', 'Set orientation…',      onOrient),
+    make('extract','keeprange','Keep page range…',    onKeepRange),
     make('mark',   'mark',   'Add marks…',          openMarksMenu),
     make('forms',  'forms',  'Edit form fields…',   openFormsDialog),
     make('ocr',    'ocr',    'OCR text layer…',     openOcrMenu),
@@ -5986,6 +6023,23 @@ async function onInsert() {
   const at = Math.min(state.view.pageIndex + 1, state.doc.pageCount());
   await dispatch('pages.insertBlank', { at });
   toast(`Inserted a blank page at ${at + 1}`, 'ok');
+}
+
+async function onOrient() {
+  const v = await formModal('Set orientation', [
+    { name: 'angle', label: 'Rotation', type: 'select', value: '0',
+      options: ['0', '90', '180', '270'].map(o => ({ value: o, label: `${o}°` })) },
+  ]);
+  if (v) dispatch('pages.orient', { pages: targetPages(), angle: Number(v.angle) });
+}
+
+async function onKeepRange() {
+  const n = state.doc.pageCount();
+  const v = await formModal('Keep page range', [
+    { name: 'from', label: `First page to keep (1–${n})`, type: 'number', value: 1, min: 1, max: n },
+    { name: 'to', label: `Last page to keep (1–${n})`, type: 'number', value: n, min: 1, max: n },
+  ]);
+  if (v) dispatch('pages.keepRange', { from: (v.from | 0) - 1, to: (v.to | 0) - 1 });
 }
 
 async function onScale() {
