@@ -27,6 +27,7 @@ export function openConvertMenu() {
     item('Split to single-page PDFs (zip)', 'One PDF per page, downloaded as a .zip', splitFiles),
     item('Images → PDF', 'Append PNG/JPEG images as new pages', imagesToPdf),
     el('hr', { style: 'border:none;border-top:1px solid var(--panel-border);margin:4px 0' }),
+    item('Compress images (keep text)', 'Downsample oversized JPEG images — text stays selectable', compressImages),
     item('Compress (flatten to images)', 'Shrink scanned/image PDFs — lossy, text becomes non-selectable', compress),
   ]); };
   return openModal({ title: 'Convert / Export', content, actions: [{ label: 'Close', value: true }] });
@@ -125,6 +126,29 @@ export function imagesToPdf() {
     catch (e) { toast('Could not insert images', 'err', { detail: e.message }); }
   };
   input.click();
+}
+
+async function compressImages() {
+  const v = await formModal('Compress images (keep text)', [
+    { name: 'maxDim', label: 'Max image dimension (px)', type: 'number', value: 2000 },
+    { name: 'quality', label: 'JPEG quality (0.1–0.95)', type: 'number', value: 0.6 },
+  ]);
+  if (!v) return;
+  const note = busy('Compressing images…');
+  try {
+    const before = (await state.doc.toBytes()).length;
+    const res = await dispatch('compress.images', {
+      maxDim: Math.round(Math.max(200, Math.min(8000, v.maxDim || 2000))),
+      quality: Math.max(0.1, Math.min(0.95, v.quality || 0.6)),
+    }, { source: 'ui' });
+    // A no-target run returns a warning (already surfaced via the toast bus); skip the size line.
+    if (!res.warning) {
+      const after = (await state.doc.toBytes()).length;
+      const pct = Math.round((1 - after / before) * 100);
+      toast(pct > 0 ? `Compressed images ~${pct}% (${kb(before)} → ${kb(after)})` : `No size reduction (${kb(after)})`, 'ok');
+    }
+  } catch (e) { toast('Image compress failed', 'err', { detail: e.message }); }
+  finally { note.remove(); }
 }
 
 async function compress() {
