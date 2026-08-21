@@ -25,8 +25,9 @@ function assertPages(indices, count) {
 // Build a new SheafDoc by copying pages from src in the given index order.
 // copyPages copies page content only — it does NOT carry the document's Info dict.
 // We must copy metadata across, or reordering/extracting would silently wipe the
-// user's title/author/dates AND stamp a fresh modification date (PDFDocument.create()
-// sets it to "now"), which would also break replay determinism.
+// user's title/author/dates. (The modification date isn't stamped by create() — pdf-lib
+// stamps it in save() under updateMetadata:true; toBytes() saves with updateMetadata:false,
+// so output stays deterministic. carryMetadata preserves the user's dates regardless.)
 async function rebuildFromOrder(src, order) {
   const { PDFDocument } = lib();
   const out = await PDFDocument.create();
@@ -90,10 +91,12 @@ export const ops = [
       const ww = clamp01(Math.min(w, 1 - x0)), hh = clamp01(Math.min(h, 1 - y0));
       if (ww <= 0 || hh <= 0) throw new Error('Crop rectangle must have positive width and height');
       const ps = doc.pdf.getPages();
-      for (const i of pages) {
-        const { width: W, height: H } = ps[i].getSize();
+      for (const i of new Set(pages)) {
+        // Anchor to the MediaBox origin, not absolute 0 — a page whose MediaBox lower-left
+        // isn't (0,0) would otherwise get a CropBox shifted off its actual content (M1).
+        const mb = ps[i].getMediaBox();
         // Normalized top-left rect → PDF CropBox (bottom-left origin, page user space).
-        ps[i].setCropBox(x0 * W, H * (1 - (y0 + hh)), ww * W, hh * H);
+        ps[i].setCropBox(mb.x + x0 * mb.width, mb.y + mb.height * (1 - (y0 + hh)), ww * mb.width, hh * mb.height);
       }
       return { doc };
     },

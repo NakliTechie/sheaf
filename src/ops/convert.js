@@ -13,8 +13,9 @@ import { dataUrlToBytes } from './_util.js';
 async function extractPages(bytes) {
   const pdf = await openForRender(bytes);
   const pages = [];
-  for (let i = 0; i < pdf.numPages; i++) pages.push(await pageText(pdf, i));
-  pdf.destroy?.();
+  // finally so a throw mid-extraction doesn't leak the pdf.js document/worker (L1).
+  try { for (let i = 0; i < pdf.numPages; i++) pages.push(await pageText(pdf, i)); }
+  finally { pdf.destroy?.(); }
   return pages;
 }
 
@@ -83,11 +84,7 @@ export const ops = [
     agentCallable: true, mutates: false,
     params: {},
     async run(doc) {
-      const bytes = await doc.toBytes();
-      const pdf = await openForRender(bytes);
-      const pages = [];
-      for (let i = 0; i < pdf.numPages; i++) pages.push(await pageText(pdf, i));
-      pdf.destroy?.();
+      const pages = await extractPages(await doc.toBytes());
       return { artifact: { text: pages.join('\n\n'), pageCount: pages.length, pages } };
     },
   },
@@ -98,10 +95,7 @@ export const ops = [
     agentCallable: true, mutates: false,
     params: {},
     async run(doc) {
-      const pdf = await openForRender(await doc.toBytes());
-      const pages = [];
-      for (let i = 0; i < pdf.numPages; i++) pages.push(await pageText(pdf, i));
-      pdf.destroy?.();
+      const pages = await extractPages(await doc.toBytes());
       return { artifact: { markdown: pagesToMarkdown(pages), pageCount: pages.length } };
     },
   },
