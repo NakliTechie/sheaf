@@ -148,4 +148,28 @@ export const ops = [
       return { doc };
     },
   },
+
+  {
+    id: 'marks.border', label: 'Page border', group: 'marks', icon: 'info',
+    description: 'Draw a rectangular border inset from the page edge on the given pages (all pages if omitted).',
+    agentCallable: true,
+    params: {
+      margin: { type: 'number', default: 24, min: 0, max: 200 },
+      thickness: { type: 'number', default: 1.5, min: 0.25, max: 20 },
+      color: { type: 'string', default: '#333333' },
+      pages: { type: 'array', items: { type: 'int', min: 0 } },
+    },
+    async run(doc, { margin, thickness, color, pages }) {
+      const { rgb } = lib();
+      const [r, g, b] = hexToRgb(color, [0.2, 0.2, 0.2]);
+      const ps = doc.pdf.getPages();
+      for (const i of resolvePages(doc, pages)) {
+        const page = ps[i];
+        const { width, height } = page.getSize();
+        const w = Math.max(1, width - 2 * margin), h = Math.max(1, height - 2 * margin);
+        page.drawRectangle({ x: margin, y: margin, width: w, height: h, borderColor: rgb(r, g, b), borderWidth: thickness });
+      }
+      return { doc };
+    },
+  },
 ];

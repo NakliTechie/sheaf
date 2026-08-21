@@ -1542,6 +1542,30 @@ const ops = [
       return { doc };
     },
   },
+
+  {
+    id: 'marks.border', label: 'Page border', group: 'marks', icon: 'info',
+    description: 'Draw a rectangular border inset from the page edge on the given pages (all pages if omitted).',
+    agentCallable: true,
+    params: {
+      margin: { type: 'number', default: 24, min: 0, max: 200 },
+      thickness: { type: 'number', default: 1.5, min: 0.25, max: 20 },
+      color: { type: 'string', default: '#333333' },
+      pages: { type: 'array', items: { type: 'int', min: 0 } },
+    },
+    async run(doc, { margin, thickness, color, pages }) {
+      const { rgb } = lib();
+      const [r, g, b] = hexToRgb(color, [0.2, 0.2, 0.2]);
+      const ps = doc.pdf.getPages();
+      for (const i of resolvePages(doc, pages)) {
+        const page = ps[i];
+        const { width, height } = page.getSize();
+        const w = Math.max(1, width - 2 * margin), h = Math.max(1, height - 2 * margin);
+        page.drawRectangle({ x: margin, y: margin, width: w, height: h, borderColor: rgb(r, g, b), borderWidth: thickness });
+      }
+      return { doc };
+    },
+  },
 ];
 
 return { ops };
@@ -4807,6 +4831,7 @@ function openMarksMenu() {
     item('Page numbers', 'Stamp {n} or {n} / {total}', addPageNumbers),
     item('Bates numbering', 'Sequential prefix + counter (legal)', addBates),
     item('Header / footer', 'Fixed text at a chosen corner', addHeaderFooter),
+    item('Page border', 'Rectangular frame inset from the edge', addBorder),
   ]); };
   return openModal({ title: 'Add marks', content, actions: [{ label: 'Close', value: true }] });
 }
@@ -4846,6 +4871,15 @@ async function addHeaderFooter() {
       options: ['top-center', 'top-left', 'top-right', 'bottom-center', 'bottom-left', 'bottom-right'].map(o => ({ value: o, label: o })) },
   ]);
   if (v?.text) dispatch('marks.text', v);
+}
+
+async function addBorder() {
+  const v = await formModal('Page border', [
+    { name: 'margin', label: 'Inset from edge (pt)', type: 'number', value: 24 },
+    { name: 'thickness', label: 'Line thickness (pt)', type: 'number', value: 1.5 },
+    { name: 'color', label: 'Colour (hex)', value: '#333333' },
+  ]);
+  if (v) dispatch('marks.border', v);
 }
 
 return { openMarksMenu };

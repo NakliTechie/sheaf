@@ -32,6 +32,26 @@ async function main() {
   await dispatch('pages.reverse', {});
   ok('reverse twice = identity', JSON.stringify(await widthsNow()) === JSON.stringify([100, 200, 300]));
 
+  console.log('\nFB-2 — marks.text (header/footer) draws content');
+  await openWidths([400]);
+  const beforeText = (await state.doc.toBytes()).length;
+  await dispatch('marks.text', { text: 'CONFIDENTIAL', position: 'top-center' });
+  const afterText = await state.doc.toBytes();
+  ok('valid reloadable after header/footer', (await PDFDocument.load(afterText)).getPageCount() === 1);
+  ok('content grew (text was drawn)', afterText.length > beforeText);
+
+  console.log('\nFB-3 — marks.border draws a frame');
+  await openWidths([400, 400]);
+  const beforeB = (await state.doc.toBytes()).length;
+  await dispatch('marks.border', { margin: 24, thickness: 2, color: '#333333', pages: [0] });
+  const afterB = await state.doc.toBytes();
+  ok('valid reloadable after border', (await PDFDocument.load(afterB)).getPageCount() === 2);
+  ok('content grew (border drawn)', afterB.length > beforeB);
+  // out-of-range page rejected loudly
+  let borderThrew = false;
+  try { await dispatch('marks.border', { pages: [9] }); } catch { borderThrew = true; }
+  ok('border on out-of-range page rejected', borderThrew);
+
   console.log(`\n${failed === 0 ? 'PASS' : 'FAIL'} — ${passed} passed, ${failed} failed\n`);
   if (failed) process.exit(1);
 }
