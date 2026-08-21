@@ -14,6 +14,7 @@ import { readFileSync, writeFileSync, readdirSync, statSync } from 'fs';
 import { resolve, dirname, relative, join } from 'path';
 import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
+import vm from 'vm';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -120,6 +121,18 @@ bundle(join(SRC, 'app.js'));
 let inlineJs = order.map(p => transformModule(p, readFileSync(p, 'utf8'))).join('\n\n');
 // Single-file artifact: engines sit next to index.html at the deploy root.
 inlineJs = inlineJs.replace("new URL('../engines', import.meta.url).pathname", "'./engines'");
+
+// Guard: the concatenated bundle must be valid standalone JS with NO leftover static
+// import/export. A mid-bundle import (e.g. an import line with a trailing comment that
+// the stripper's `$`-anchored regex misses) parses fine per-file — so `npm test`, which
+// imports modules directly, and the reproduce check, which only compares bytes, both stay
+// green — yet the built <script type="module"> fails to parse and the whole app is dead.
+// Parse as a Script (not a Module): any surviving top-level import/export throws here.
+try {
+  new vm.Script(inlineJs, { filename: 'sheaf-bundle.js' });
+} catch (err) {
+  throw new Error(`Inlined bundle is not valid standalone JS (leftover import/export or syntax error): ${err.message}`);
+}
 
 const css = collectCss(SRC);
 const template = readFileSync(join(SRC, 'index.html'), 'utf8');

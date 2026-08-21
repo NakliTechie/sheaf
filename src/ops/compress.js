@@ -7,7 +7,8 @@
 import { getEngine } from '../core/engines.js';
 import { openForRender } from '../core/render.js';
 import { SheafDoc } from '../core/doc.js';
-import { carryMetadata } from './pages.js';   // one canonical metadata-carry (keywords/creator/producer included)
+// one canonical metadata-carry (keywords/creator/producer included)
+import { carryMetadata } from './pages.js';
 
 function dataUrlToBytes(dataUrl) {
   const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
