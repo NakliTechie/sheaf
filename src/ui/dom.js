@@ -6,6 +6,9 @@ export function el(spec, props = {}, children = []) {
   if (classes.length) node.className = classes.join(' ');
   for (const [k, v] of Object.entries(props)) {
     if (k === 'class') node.className = v;
+    // `html` is a raw innerHTML sink — pass ONLY static, app-authored markup here. Anything
+    // derived from the document (metadata, filenames, text-layer, form values) MUST use `text`
+    // (or be escaped by the caller, as recovery.js does), or it becomes an XSS vector.
     else if (k === 'html') node.innerHTML = v;
     else if (k === 'text') node.textContent = v;
     else if (k === 'dataset') Object.assign(node.dataset, v);

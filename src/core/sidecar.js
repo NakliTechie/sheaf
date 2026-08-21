@@ -8,6 +8,7 @@
 
 import { complete, isAvailable } from './ai.js';
 import { openForRender } from './render.js';
+import { compileSafeRegexes } from './saferegex.js';
 
 // Text items with normalized (0..1, top-left) boxes — for redaction targeting.
 async function pageTextItems(pdf, pageIndex) {
@@ -53,7 +54,9 @@ export async function describeToRedact(doc, description) {
     { role: 'user', content: `The user wants to redact: "${description}". Return JSON {"patterns":["<regex source>", ...]} — JavaScript regular-expression sources (no slashes, no flags) that match such text. Be precise; prefer specific patterns over broad ones.` },
   ], { json: true });
   const sources = Array.isArray(out.patterns) ? out.patterns : [];
-  const patterns = sources.map(p => { try { return new RegExp(p, 'gi'); } catch { return null; } }).filter(Boolean);
+  // The pattern sources are model output — untrusted. Bound count/length and reject
+  // catastrophic-backtracking shapes before compiling+running them over the document (M4).
+  const patterns = compileSafeRegexes(sources);
   if (!patterns.length) return { regions: [], patterns: sources };
 
   const pdf = await openForRender(await doc.toBytes());
