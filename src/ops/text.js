@@ -1,7 +1,13 @@
 // ops/text.js — text editing via whiteout-and-retype. Covers a region with an opaque
 // rectangle (default white) and optionally draws replacement text. This is the
-// pragmatic ~80% of in-place text editing; font-matched span-replace (which needs the
-// PDF.js text layer for glyph positions + font detection) is a v1.x refinement.
+// pragmatic ~80% of in-place text editing.
+//
+// Font-matched span-replace: the caller (ui/spanedit.js) detects the run's family
+// (serif/sans/mono), weight, and slant from the PDF.js text layer + loaded font object,
+// and its baseline, then passes them here so the retype uses the closest Standard-14 face
+// on the original baseline — not always Helvetica. Reusing the exact EMBEDDED glyph
+// program (perfect fidelity for same-glyph edits) needs a vendored fontkit and is the
+// remaining step; see plan/pending.md.
 //
 // Coordinates are normalized 0..1 (screen orientation), like annotations.
 
@@ -10,6 +16,15 @@ import { winAnsiSafe } from './textsafe.js';
 
 function lib() { return getEngine('pdf-lib'); }
 function hexToRgb(hex, fb) { const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || '')); if (!m) return fb; const n = parseInt(m[1], 16); return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; }
+
+// Map a detected family + weight + slant to the closest Standard-14 face. These are
+// the fonts pdf-lib embeds without fontkit, so this works for any replacement text.
+function pickStdFont(SF, family, bold, italic) {
+  const fam = family === 'serif' ? 'times' : family === 'mono' ? 'courier' : 'helv';
+  if (fam === 'times') return bold && italic ? SF.TimesRomanBoldItalic : bold ? SF.TimesRomanBold : italic ? SF.TimesRomanItalic : SF.TimesRoman;
+  if (fam === 'courier') return bold && italic ? SF.CourierBoldOblique : bold ? SF.CourierBold : italic ? SF.CourierOblique : SF.Courier;
+  return bold && italic ? SF.HelveticaBoldOblique : bold ? SF.HelveticaBold : italic ? SF.HelveticaOblique : SF.Helvetica;
+}
 
 export const ops = [
   {
@@ -24,6 +39,13 @@ export const ops = [
       text: { type: 'string', default: '', maxLength: 2000 },
       fontSize: { type: 'number', default: 12, min: 4, max: 200 },
       textColor: { type: 'string', default: '#111111' },
+      // Font match: family is 'sans' | 'serif' | 'mono' (default sans → Helvetica).
+      fontFamily: { type: 'string', default: 'sans' },
+      bold: { type: 'bool', default: false },
+      italic: { type: 'bool', default: false },
+      // Normalized (0..1, top-origin) baseline of the original run; when given, the
+      // retype sits on it instead of being vertically centered in the covered box.
+      baseline: { type: 'number', default: null },
     },
     async run(doc, p) {
       const { rgb, StandardFonts } = lib();
@@ -35,10 +57,13 @@ export const ops = [
       const rx = p.x * W, ry = H * (1 - (p.y + p.h)), rw = p.w * W, rh = p.h * H;
       page.drawRectangle({ x: rx, y: ry, width: rw, height: rh, color: rgb(fr, fg, fb) });
       if (p.text) {
-        const font = await doc.pdf.embedFont(StandardFonts.Helvetica);
+        const font = await doc.pdf.embedFont(pickStdFont(StandardFonts, p.fontFamily, p.bold, p.italic));
         const [tr, tg, tb] = hexToRgb(p.textColor, [0.07, 0.07, 0.07]);
-        // Baseline a bit above the bottom of the covered box.
-        page.drawText(winAnsiSafe(p.text), { x: rx + 2, y: ry + Math.max(2, (rh - p.fontSize) / 2), size: p.fontSize, font, color: rgb(tr, tg, tb) });
+        // Sit on the original baseline when the caller matched it; else center in the box.
+        const ty = (typeof p.baseline === 'number')
+          ? H * (1 - p.baseline)
+          : ry + Math.max(2, (rh - p.fontSize) / 2);
+        page.drawText(winAnsiSafe(p.text), { x: rx + 2, y: ty, size: p.fontSize, font, color: rgb(tr, tg, tb) });
       }
       return { doc };
     },
