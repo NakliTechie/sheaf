@@ -4,7 +4,17 @@
 // while text outside the box survives.
 
 import * as PDFLib from '../engines/pdf-lib/2.9.1/pdf-lib.esm.js';
-const { PDFDocument, StandardFonts, PDFArray, decodePDFRawStream } = PDFLib;
+const { PDFDocument, StandardFonts, PDFArray, decodePDFRawStream, PDFName, PDFRawStream, PDFString, PDFNumber } = PDFLib;
+
+const latin1 = (bytes) => new TextDecoder('latin1').decode(bytes);
+const l1bytes = (str) => { const b = new Uint8Array(str.length); for (let i = 0; i < str.length; i++) b[i] = str.charCodeAt(i) & 0xff; return b; };
+function rawStream(ctx, entries, contentStr) {
+  const bytes = l1bytes(contentStr);
+  const dict = ctx.obj({});
+  for (const [k, v] of Object.entries(entries)) dict.set(PDFName.of(k), v);
+  dict.set(PDFName.of('Length'), PDFNumber.of(bytes.length));
+  return PDFRawStream.of(dict, bytes);
+}
 import { registerEngine } from '../src/core/engines.js';
 import { registerOps } from '../src/ops/index.js';
 import { dispatch } from '../src/core/runner.js';
@@ -115,6 +125,65 @@ async function main() {
   const unscaled = 'BT /F1 10 Tf 1 0 0 1 50 400 Tm <53656372657431323334> Tj ET';
   const m1c = redactTokens(tokenize(unscaled), [{ x0: 140, y0: 395, x1: 155, y1: 410 }]);
   ok('unscaled run past the box is not touched (no over-reach)', m1c.dirty === false);
+
+  console.log('\nH3 — a text-bearing annotation under the box is removed, not just covered');
+  {
+    const da = await PDFDocument.create();
+    const pa = da.addPage([300, 200]);
+    const c = da.context;
+    const annot = c.obj({});
+    annot.set(PDFName.of('Type'), PDFName.of('Annot'));
+    annot.set(PDFName.of('Subtype'), PDFName.of('FreeText'));
+    annot.set(PDFName.of('Rect'), c.obj([40, 140, 200, 170]));
+    annot.set(PDFName.of('Contents'), PDFString.of('SECRETNOTE9'));
+    pa.node.set(PDFName.of('Annots'), c.obj([c.register(annot)]));
+    const bytesA = await da.save({ updateMetadata: false, useObjectStreams: false });
+    ok('annotation text present before redaction', latin1(bytesA).includes('SECRETNOTE9'));
+    await dispatch('open.bytes', { bytes: bytesA });
+    await dispatch('redact.region', { page: 0, x: 0.1, y: 0.15, w: 0.6, h: 0.15 });
+    // Reload the output and confirm the annotation is gone from the page AND its text does not
+    // survive anywhere in the (decompressed) object set — an orphaned dict still in the bytes
+    // with the secret would be exactly the leak C1 forbids.
+    const d1 = await PDFDocument.load(await state.doc.toBytes());
+    const a1 = d1.getPage(0).node.get(PDFName.of('Annots'));
+    ok('annotation removed from the page', !a1 || (a1 instanceof PDFArray && a1.size() === 0));
+    let leak = false;
+    for (const [, obj] of d1.context.enumerateIndirectObjects()) { try { if (String(obj).includes('SECRETNOTE9')) leak = true; } catch {} }
+    ok('annotation text scrubbed everywhere (no orphan leak)', !leak);
+  }
+
+  console.log('\nH3 — text inside a form XObject under the box is removed (CTM-aware recursion)');
+  {
+    const dx = await PDFDocument.create();
+    const px = dx.addPage([300, 200]);
+    const c = dx.context;
+    const xref = c.register(rawStream(c, {
+      Type: PDFName.of('XObject'), Subtype: PDFName.of('Form'), BBox: c.obj([0, 0, 120, 20]),
+    }, 'BT /F1 12 Tf 1 0 0 1 5 5 Tm <5365637265743738> Tj ET')); // "Secret78"
+    px.node.set(PDFName.of('Contents'), c.register(rawStream(c, {}, 'q 1 0 0 1 40 140 cm /Fm0 Do Q')));
+    let res = c.lookup(px.node.get(PDFName.of('Resources')));
+    if (!res) { res = c.obj({}); px.node.set(PDFName.of('Resources'), c.register(res)); }
+    const xd = c.obj({}); xd.set(PDFName.of('Fm0'), xref); res.set(PDFName.of('XObject'), xd);
+    const bytesX = await dx.save({ updateMetadata: false });
+    ok('xobject secret present before redaction', latin1(bytesX).includes('5365637265743738'));
+    await dispatch('open.bytes', { bytes: bytesX });
+    const rX = await dispatch('redact.region', { page: 0, x: 0.12, y: 0.17, w: 0.42, h: 0.14 });
+    ok('xobject secret removed from output (in-place, no orphan)', !latin1(await state.doc.toBytes()).includes('5365637265743738'));
+    ok('xobject removal reports no residue (clean redaction)', !rX.warning);
+  }
+
+  console.log('\nC1 — rotated text under the box cannot be verified → warning, not a silent clean box');
+  {
+    const dr = await PDFDocument.create();
+    const pr = dr.addPage([300, 200]);
+    const c = dr.context;
+    pr.node.set(PDFName.of('Contents'), c.register(rawStream(c, {},
+      'BT /F1 14 Tf 0.7 0.7 -0.7 0.7 100 100 Tm <5365637265747A> Tj ET'))); // rotated run at (100,100)
+    const bytesR = await dr.save({ updateMetadata: false });
+    await dispatch('open.bytes', { bytes: bytesR });
+    const rR = await dispatch('redact.region', { page: 0, x: 0.25, y: 0.4, w: 0.3, h: 0.2 });
+    ok('rotated text under box returns a warning (C1 honesty)', typeof rR.warning === 'string' && rR.warning.length > 0);
+  }
 
   console.log('\nIngress');
   let threw = false; try { await dispatch('redact.region', { page: 9, x: 0, y: 0, w: 1, h: 0.1 }); } catch { threw = true; }
