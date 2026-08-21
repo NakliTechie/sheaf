@@ -155,6 +155,7 @@ function buildPageOps() {
     make('reorder','reorder','Reverse page order',   () => dispatch('pages.reverse', {})),
     make('rotate', 'orient', 'Set orientation…',      onOrient),
     make('extract','keeprange','Keep page range…',    onKeepRange),
+    make('scale', 'margin',  'Add margins…',          onAddMargin),
     make('mark',   'mark',   'Add marks…',          openMarksMenu),
     make('forms',  'forms',  'Edit form fields…',   openFormsDialog),
     make('ocr',    'ocr',    'OCR text layer…',     openOcrMenu),
@@ -245,6 +246,13 @@ async function onKeepRange() {
     { name: 'to', label: `Last page to keep (1–${n})`, type: 'number', value: n, min: 1, max: n },
   ]);
   if (v) dispatch('pages.keepRange', { from: (v.from | 0) - 1, to: (v.to | 0) - 1 });
+}
+
+async function onAddMargin() {
+  const v = await formModal('Add margins', [
+    { name: 'margin', label: 'Margin (pt) added on every side', type: 'number', value: 36, min: 0, max: 400 },
+  ]);
+  if (v && v.margin) dispatch('pages.addMargin', { margin: v.margin, pages: targetPages() });
 }
 
 async function onScale() {

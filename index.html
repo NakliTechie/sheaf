@@ -1237,6 +1237,28 @@ const ops = [
   },
 
   {
+    id: 'pages.addMargin', label: 'Add margins', group: 'page', icon: 'scale',
+    description: 'Add a uniform margin (whitespace) around the visible area of the given pages by growing the page box; existing content is preserved in place. Decision: bigger page, content kept — not shrunk. Margin is added around the current CropBox, so it composes with an earlier crop.',
+    agentCallable: true,
+    params: {
+      margin: { type: 'number', required: true, min: 0, max: 400 },
+      pages: { type: 'array', items: { type: 'int', min: 0 } },
+    },
+    run(doc, { margin, pages }) {
+      const ps = doc.pdf.getPages();
+      const targets = (pages && pages.length) ? pages : [...Array(ps.length).keys()];
+      for (const i of new Set(targets)) {
+        if (i < 0 || i >= ps.length) throw new Error(`Page ${i} out of range`);
+        const b = ps[i].getCropBox();
+        const nx = b.x - margin, ny = b.y - margin, nw = b.width + 2 * margin, nh = b.height + 2 * margin;
+        ps[i].setMediaBox(nx, ny, nw, nh);
+        ps[i].setCropBox(nx, ny, nw, nh);
+      }
+      return { doc };
+    },
+  },
+
+  {
     id: 'pages.reverse', label: 'Reverse page order', group: 'page', icon: 'reorder',
     description: 'Reverse the order of all pages in the document.',
     agentCallable: true,
@@ -5950,6 +5972,7 @@ function buildPageOps() {
     make('reorder','reorder','Reverse page order',   () => dispatch('pages.reverse', {})),
     make('rotate', 'orient', 'Set orientation…',      onOrient),
     make('extract','keeprange','Keep page range…',    onKeepRange),
+    make('scale', 'margin',  'Add margins…',          onAddMargin),
     make('mark',   'mark',   'Add marks…',          openMarksMenu),
     make('forms',  'forms',  'Edit form fields…',   openFormsDialog),
     make('ocr',    'ocr',    'OCR text layer…',     openOcrMenu),
@@ -6040,6 +6063,13 @@ async function onKeepRange() {
     { name: 'to', label: `Last page to keep (1–${n})`, type: 'number', value: n, min: 1, max: n },
   ]);
   if (v) dispatch('pages.keepRange', { from: (v.from | 0) - 1, to: (v.to | 0) - 1 });
+}
+
+async function onAddMargin() {
+  const v = await formModal('Add margins', [
+    { name: 'margin', label: 'Margin (pt) added on every side', type: 'number', value: 36, min: 0, max: 400 },
+  ]);
+  if (v && v.margin) dispatch('pages.addMargin', { margin: v.margin, pages: targetPages() });
 }
 
 async function onScale() {

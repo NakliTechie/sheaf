@@ -166,6 +166,28 @@ export const ops = [
   },
 
   {
+    id: 'pages.addMargin', label: 'Add margins', group: 'page', icon: 'scale',
+    description: 'Add a uniform margin (whitespace) around the visible area of the given pages by growing the page box; existing content is preserved in place. Decision: bigger page, content kept — not shrunk. Margin is added around the current CropBox, so it composes with an earlier crop.',
+    agentCallable: true,
+    params: {
+      margin: { type: 'number', required: true, min: 0, max: 400 },
+      pages: { type: 'array', items: { type: 'int', min: 0 } },
+    },
+    run(doc, { margin, pages }) {
+      const ps = doc.pdf.getPages();
+      const targets = (pages && pages.length) ? pages : [...Array(ps.length).keys()];
+      for (const i of new Set(targets)) {
+        if (i < 0 || i >= ps.length) throw new Error(`Page ${i} out of range`);
+        const b = ps[i].getCropBox();
+        const nx = b.x - margin, ny = b.y - margin, nw = b.width + 2 * margin, nh = b.height + 2 * margin;
+        ps[i].setMediaBox(nx, ny, nw, nh);
+        ps[i].setCropBox(nx, ny, nw, nh);
+      }
+      return { doc };
+    },
+  },
+
+  {
     id: 'pages.reverse', label: 'Reverse page order', group: 'page', icon: 'reorder',
     description: 'Reverse the order of all pages in the document.',
     agentCallable: true,

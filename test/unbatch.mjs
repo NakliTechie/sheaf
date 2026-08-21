@@ -43,6 +43,15 @@ async function main() {
   ok('from > to rejected', await rejects('pages.keepRange', { from: 3, to: 1 }));
   ok('out-of-range rejected', await rejects('pages.keepRange', { from: 0, to: 9 }));
 
+  console.log('\nUB-3 — pages.addMargin');
+  await openWidths([200]);
+  await dispatch('pages.addMargin', { margin: 20 });
+  const mb = (await reload()).getPage(0).getMediaBox();
+  ok('media box grew by 2*margin (200→240 wide)', Math.round(mb.width) === 240);
+  ok('media box grew by 2*margin (200→240 tall)', Math.round(mb.height) === 240);
+  ok('origin shifted by -margin (x=-20)', Math.round(mb.x) === -20);
+  ok('still one page, reloadable', (await reload()).getPageCount() === 1);
+
   console.log(`\n${failed === 0 ? 'PASS' : 'FAIL'} — ${passed} passed, ${failed} failed\n`);
   if (failed) process.exit(1);
 }
