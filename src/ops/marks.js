@@ -12,7 +12,8 @@ function resolvePages(doc, pages) {
   const count = doc.pageCount();
   if (!pages || !pages.length) return [...Array(count).keys()];
   for (const i of pages) if (i < 0 || i >= count) throw new Error(`Page ${i} out of range`);
-  return pages;
+  // Dedupe: a repeated index would double-draw the mark (e.g. watermark opacity doubles).
+  return [...new Set(pages)];
 }
 
 async function helvetica(doc) {

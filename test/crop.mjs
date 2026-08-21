@@ -64,6 +64,21 @@ async function main() {
   catch { threw = true; }
   ok('zero-width crop rejected', threw);
 
+  console.log('\nNon-zero MediaBox origin (M1)');
+  // A page whose MediaBox lower-left is (50,50): crop must anchor to that origin.
+  {
+    const d = await PDFDocument.create();
+    const p = d.addPage([200, 300]);
+    p.setMediaBox(50, 50, 200, 300); // origin (50,50), size 200x300
+    await dispatch('open.bytes', { bytes: await d.save({ updateMetadata: false }) });
+    await dispatch('pages.crop', { pages: [0], x: 0, y: 0, w: 0.5, h: 0.5 });
+    const cb = (await PDFDocument.load(await state.doc.toBytes())).getPage(0).getCropBox();
+    ok('crop x anchored at MediaBox origin (50)', near(cb.x, 50));
+    ok('crop y = mb.y + h*(1-(y+hh)) = 50+150 = 200', near(cb.y, 200));
+    ok('crop w = 0.5*200 = 100', near(cb.width, 100));
+    ok('crop h = 0.5*300 = 150', near(cb.height, 150));
+  }
+
   console.log(`\n${failed === 0 ? 'PASS' : 'FAIL'} — ${passed} passed, ${failed} failed\n`);
   if (failed) process.exit(1);
 }

@@ -52,6 +52,14 @@ async function main() {
   let borderThrew = false;
   try { await dispatch('marks.border', { pages: [9] }); } catch { borderThrew = true; }
   ok('border on out-of-range page rejected', borderThrew);
+  // L2 dedupe: a repeated index draws once — [0,0,0] must equal [0].
+  await openWidths([300]);
+  await dispatch('marks.border', { pages: [0], margin: 24, thickness: 2 });
+  const once = (await state.doc.toBytes()).length;
+  await openWidths([300]);
+  await dispatch('marks.border', { pages: [0, 0, 0], margin: 24, thickness: 2 });
+  const thrice = (await state.doc.toBytes()).length;
+  ok('resolvePages dedupes repeated indices (border [0,0,0] == [0])', once === thrice);
 
   console.log('\nFB-4 — convert.split into single-page PDFs + zip');
   await openWidths([100, 200, 300]);

@@ -30,6 +30,13 @@ function targetPages() {
   return sel.length ? sel : [state.view.pageIndex];
 }
 
+// Dispatch a page op and surface a SPECIFIC error if it rejects (e.g. keepRange from>to),
+// instead of letting it fall to the global net's generic "something went wrong" (L3).
+async function runOp(id, params) {
+  try { await dispatch(id, params); }
+  catch (e) { toast('That action could not be applied', 'err', { detail: e.message }); }
+}
+
 function btn(iconName, label, onClick, { needsDoc = false, danger = false, id = '', title = '' } = {}) {
   const tip = title || label || iconName;
   const b = el('button', {
@@ -146,13 +153,13 @@ function buildPageOps() {
     return { b, iconName, title, menuLabel, danger, run, folded: false };
   };
   pageOps = [
-    make('rotate', 'rotate', 'Rotate 90°',         () => dispatch('pages.rotate', { pages: targetPages(), angle: 90 })),
+    make('rotate', 'rotate', 'Rotate 90°',         () => runOp('pages.rotate', { pages: targetPages(), angle: 90 })),
     make('trash',  'trash',  'Delete pages',        onDelete, true),
-    make('copy',   'copy',   'Duplicate pages',     () => dispatch('pages.duplicate', { pages: targetPages() })),
+    make('copy',   'copy',   'Duplicate pages',     () => runOp('pages.duplicate', { pages: targetPages() })),
     make('insert', 'insert', 'Insert blank page',   onInsert),
     make('scale',  'scale',  'Scale pages…',        onScale),
     make('merge',  'merge',  'Merge a PDF in…',     mergePdf),
-    make('reorder','reorder','Reverse page order',   () => dispatch('pages.reverse', {})),
+    make('reorder','reorder','Reverse page order',   () => runOp('pages.reverse', {})),
     make('rotate', 'orient', 'Set orientation…',      onOrient),
     make('extract','keeprange','Keep page range…',    onKeepRange),
     make('scale', 'margin',  'Add margins…',          onAddMargin),
@@ -237,7 +244,7 @@ async function onOrient() {
     { name: 'angle', label: 'Rotation', type: 'select', value: '0',
       options: ['0', '90', '180', '270'].map(o => ({ value: o, label: `${o}°` })) },
   ]);
-  if (v) dispatch('pages.orient', { pages: targetPages(), angle: Number(v.angle) });
+  if (v) runOp('pages.orient', { pages: targetPages(), angle: Number(v.angle) });
 }
 
 async function onKeepRange() {
@@ -246,7 +253,7 @@ async function onKeepRange() {
     { name: 'from', label: `First page to keep (1–${n})`, type: 'number', value: 1, min: 1, max: n },
     { name: 'to', label: `Last page to keep (1–${n})`, type: 'number', value: n, min: 1, max: n },
   ]);
-  if (v) dispatch('pages.keepRange', { from: (v.from | 0) - 1, to: (v.to | 0) - 1 });
+  if (v) runOp('pages.keepRange', { from: (v.from | 0) - 1, to: (v.to | 0) - 1 });
 }
 
 async function onNUp() {
@@ -254,21 +261,21 @@ async function onNUp() {
     { name: 'perSheet', label: 'Pages per sheet', type: 'select', value: '2',
       options: [{ value: '2', label: '2 per sheet' }, { value: '4', label: '4 per sheet' }] },
   ]);
-  if (v) dispatch('pages.nUp', { perSheet: Number(v.perSheet) });
+  if (v) runOp('pages.nUp', { perSheet: Number(v.perSheet) });
 }
 
 async function onAddMargin() {
   const v = await formModal('Add margins', [
     { name: 'margin', label: 'Margin (pt) added on every side', type: 'number', value: 36, min: 0, max: 400 },
   ]);
-  if (v && v.margin) dispatch('pages.addMargin', { margin: v.margin, pages: targetPages() });
+  if (v && v.margin) runOp('pages.addMargin', { margin: v.margin, pages: targetPages() });
 }
 
 async function onScale() {
   const v = await formModal('Scale pages', [
     { name: 'factor', label: 'Scale factor (1 = unchanged)', type: 'number', value: 1, min: 0.05, max: 20 },
   ]);
-  if (v && v.factor) dispatch('pages.scale', { pages: targetPages(), factor: v.factor });
+  if (v && v.factor) runOp('pages.scale', { pages: targetPages(), factor: v.factor });
 }
 
 async function onMetadata() {

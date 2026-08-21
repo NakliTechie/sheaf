@@ -540,9 +540,10 @@ class History {
         this._snaps = this._snaps
           .filter(s => s.pointer >= floorSnap.pointer)
           .map(s => ({ ...s, pointer: s.pointer - cut }));   // floorSnap → pointer -1
-        this._pointer = Math.max(-1, this._pointer - cut);
       }
     }
+    // push() always lands the pointer at the new tip (the line below); no intermediate
+    // pointer adjustment is needed in the trim branch.
     this._pointer = this._ops.length - 1;
     return this._pointer;
   }
@@ -1096,8 +1097,9 @@ function assertPages(indices, count) {
 // Build a new SheafDoc by copying pages from src in the given index order.
 // copyPages copies page content only — it does NOT carry the document's Info dict.
 // We must copy metadata across, or reordering/extracting would silently wipe the
-// user's title/author/dates AND stamp a fresh modification date (PDFDocument.create()
-// sets it to "now"), which would also break replay determinism.
+// user's title/author/dates. (The modification date isn't stamped by create() — pdf-lib
+// stamps it in save() under updateMetadata:true; toBytes() saves with updateMetadata:false,
+// so output stays deterministic. carryMetadata preserves the user's dates regardless.)
 async function rebuildFromOrder(src, order) {
   const { PDFDocument } = lib();
   const out = await PDFDocument.create();
@@ -1161,10 +1163,12 @@ const ops = [
       const ww = clamp01(Math.min(w, 1 - x0)), hh = clamp01(Math.min(h, 1 - y0));
       if (ww <= 0 || hh <= 0) throw new Error('Crop rectangle must have positive width and height');
       const ps = doc.pdf.getPages();
-      for (const i of pages) {
-        const { width: W, height: H } = ps[i].getSize();
+      for (const i of new Set(pages)) {
+        // Anchor to the MediaBox origin, not absolute 0 — a page whose MediaBox lower-left
+        // isn't (0,0) would otherwise get a CropBox shifted off its actual content (M1).
+        const mb = ps[i].getMediaBox();
         // Normalized top-left rect → PDF CropBox (bottom-left origin, page user space).
-        ps[i].setCropBox(x0 * W, H * (1 - (y0 + hh)), ww * W, hh * H);
+        ps[i].setCropBox(mb.x + x0 * mb.width, mb.y + mb.height * (1 - (y0 + hh)), ww * mb.width, hh * mb.height);
       }
       return { doc };
     },
@@ -1523,7 +1527,8 @@ function resolvePages(doc, pages) {
   const count = doc.pageCount();
   if (!pages || !pages.length) return [...Array(count).keys()];
   for (const i of pages) if (i < 0 || i >= count) throw new Error(`Page ${i} out of range`);
-  return pages;
+  // Dedupe: a repeated index would double-draw the mark (e.g. watermark opacity doubles).
+  return [...new Set(pages)];
 }
 
 async function helvetica(doc) {
@@ -2365,8 +2370,9 @@ const dataUrlToBytes = __m_ops__util.dataUrlToBytes;
 async function extractPages(bytes) {
   const pdf = await openForRender(bytes);
   const pages = [];
-  for (let i = 0; i < pdf.numPages; i++) pages.push(await pageText(pdf, i));
-  pdf.destroy?.();
+  // finally so a throw mid-extraction doesn't leak the pdf.js document/worker (L1).
+  try { for (let i = 0; i < pdf.numPages; i++) pages.push(await pageText(pdf, i)); }
+  finally { pdf.destroy?.(); }
   return pages;
 }
 
@@ -2435,11 +2441,7 @@ const ops = [
     agentCallable: true, mutates: false,
     params: {},
     async run(doc) {
-      const bytes = await doc.toBytes();
-      const pdf = await openForRender(bytes);
-      const pages = [];
-      for (let i = 0; i < pdf.numPages; i++) pages.push(await pageText(pdf, i));
-      pdf.destroy?.();
+      const pages = await extractPages(await doc.toBytes());
       return { artifact: { text: pages.join('\n\n'), pageCount: pages.length, pages } };
     },
   },
@@ -2450,10 +2452,7 @@ const ops = [
     agentCallable: true, mutates: false,
     params: {},
     async run(doc) {
-      const pdf = await openForRender(await doc.toBytes());
-      const pages = [];
-      for (let i = 0; i < pdf.numPages; i++) pages.push(await pageText(pdf, i));
-      pdf.destroy?.();
+      const pages = await extractPages(await doc.toBytes());
       return { artifact: { markdown: pagesToMarkdown(pages), pageCount: pages.length } };
     },
   },
@@ -4246,9 +4245,10 @@ async function confirmDiscardIfDirty() {
 
 async function openPdf() {
   try {
+    // Confirm BEFORE the picker so a cancel doesn't discard the file the user just chose (L4).
+    if (!await confirmDiscardIfDirty()) return;
     const picked = storage.hasFSA ? await storage.pickAndReadPdf() : await storage.readPdfViaInput();
     if (!picked) return;
-    if (!await confirmDiscardIfDirty()) return;
     await ensurePdfLib();
     await dispatch('open.bytes', { bytes: picked.bytes });
     state.session.fileName = picked.name;
@@ -5982,6 +5982,13 @@ function targetPages() {
   return sel.length ? sel : [state.view.pageIndex];
 }
 
+// Dispatch a page op and surface a SPECIFIC error if it rejects (e.g. keepRange from>to),
+// instead of letting it fall to the global net's generic "something went wrong" (L3).
+async function runOp(id, params) {
+  try { await dispatch(id, params); }
+  catch (e) { toast('That action could not be applied', 'err', { detail: e.message }); }
+}
+
 function btn(iconName, label, onClick, { needsDoc = false, danger = false, id = '', title = '' } = {}) {
   const tip = title || label || iconName;
   const b = el('button', {
@@ -6098,13 +6105,13 @@ function buildPageOps() {
     return { b, iconName, title, menuLabel, danger, run, folded: false };
   };
   pageOps = [
-    make('rotate', 'rotate', 'Rotate 90°',         () => dispatch('pages.rotate', { pages: targetPages(), angle: 90 })),
+    make('rotate', 'rotate', 'Rotate 90°',         () => runOp('pages.rotate', { pages: targetPages(), angle: 90 })),
     make('trash',  'trash',  'Delete pages',        onDelete, true),
-    make('copy',   'copy',   'Duplicate pages',     () => dispatch('pages.duplicate', { pages: targetPages() })),
+    make('copy',   'copy',   'Duplicate pages',     () => runOp('pages.duplicate', { pages: targetPages() })),
     make('insert', 'insert', 'Insert blank page',   onInsert),
     make('scale',  'scale',  'Scale pages…',        onScale),
     make('merge',  'merge',  'Merge a PDF in…',     mergePdf),
-    make('reorder','reorder','Reverse page order',   () => dispatch('pages.reverse', {})),
+    make('reorder','reorder','Reverse page order',   () => runOp('pages.reverse', {})),
     make('rotate', 'orient', 'Set orientation…',      onOrient),
     make('extract','keeprange','Keep page range…',    onKeepRange),
     make('scale', 'margin',  'Add margins…',          onAddMargin),
@@ -6189,7 +6196,7 @@ async function onOrient() {
     { name: 'angle', label: 'Rotation', type: 'select', value: '0',
       options: ['0', '90', '180', '270'].map(o => ({ value: o, label: `${o}°` })) },
   ]);
-  if (v) dispatch('pages.orient', { pages: targetPages(), angle: Number(v.angle) });
+  if (v) runOp('pages.orient', { pages: targetPages(), angle: Number(v.angle) });
 }
 
 async function onKeepRange() {
@@ -6198,7 +6205,7 @@ async function onKeepRange() {
     { name: 'from', label: `First page to keep (1–${n})`, type: 'number', value: 1, min: 1, max: n },
     { name: 'to', label: `Last page to keep (1–${n})`, type: 'number', value: n, min: 1, max: n },
   ]);
-  if (v) dispatch('pages.keepRange', { from: (v.from | 0) - 1, to: (v.to | 0) - 1 });
+  if (v) runOp('pages.keepRange', { from: (v.from | 0) - 1, to: (v.to | 0) - 1 });
 }
 
 async function onNUp() {
@@ -6206,21 +6213,21 @@ async function onNUp() {
     { name: 'perSheet', label: 'Pages per sheet', type: 'select', value: '2',
       options: [{ value: '2', label: '2 per sheet' }, { value: '4', label: '4 per sheet' }] },
   ]);
-  if (v) dispatch('pages.nUp', { perSheet: Number(v.perSheet) });
+  if (v) runOp('pages.nUp', { perSheet: Number(v.perSheet) });
 }
 
 async function onAddMargin() {
   const v = await formModal('Add margins', [
     { name: 'margin', label: 'Margin (pt) added on every side', type: 'number', value: 36, min: 0, max: 400 },
   ]);
-  if (v && v.margin) dispatch('pages.addMargin', { margin: v.margin, pages: targetPages() });
+  if (v && v.margin) runOp('pages.addMargin', { margin: v.margin, pages: targetPages() });
 }
 
 async function onScale() {
   const v = await formModal('Scale pages', [
     { name: 'factor', label: 'Scale factor (1 = unchanged)', type: 'number', value: 1, min: 0.05, max: 20 },
   ]);
-  if (v && v.factor) dispatch('pages.scale', { pages: targetPages(), factor: v.factor });
+  if (v && v.factor) runOp('pages.scale', { pages: targetPages(), factor: v.factor });
 }
 
 async function onMetadata() {

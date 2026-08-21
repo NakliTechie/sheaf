@@ -39,9 +39,10 @@ export class History {
         this._snaps = this._snaps
           .filter(s => s.pointer >= floorSnap.pointer)
           .map(s => ({ ...s, pointer: s.pointer - cut }));   // floorSnap → pointer -1
-        this._pointer = Math.max(-1, this._pointer - cut);
       }
     }
+    // push() always lands the pointer at the new tip (the line below); no intermediate
+    // pointer adjustment is needed in the trim branch.
     this._pointer = this._ops.length - 1;
     return this._pointer;
   }

@@ -29,9 +29,10 @@ export async function confirmDiscardIfDirty() {
 
 export async function openPdf() {
   try {
+    // Confirm BEFORE the picker so a cancel doesn't discard the file the user just chose (L4).
+    if (!await confirmDiscardIfDirty()) return;
     const picked = storage.hasFSA ? await storage.pickAndReadPdf() : await storage.readPdfViaInput();
     if (!picked) return;
-    if (!await confirmDiscardIfDirty()) return;
     await ensurePdfLib();
     await dispatch('open.bytes', { bytes: picked.bytes });
     state.session.fileName = picked.name;
