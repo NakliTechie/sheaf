@@ -11,9 +11,12 @@
 // the module is allowed to execute. Bump version + sha together, never one alone.
 export const MANIFEST = {
   'pdf-lib': {
-    version: '1.17.1',
-    path: 'pdf-lib/1.17.1/pdf-lib.esm.js',
-    sha256: '4bd8dd3155d7b1062a161567bf68168c55283bd5fad6a638b16ae028846b52c5',
+    // @cantoo/pdf-lib — the maintained fork of the (dormant since 2021) Hopding
+    // pdf-lib. Same API surface Sheaf consumes; bundled self-contained ESM from
+    // the package's dist/. Bump version + sha together, never one alone.
+    version: '2.9.1',
+    path: 'pdf-lib/2.9.1/pdf-lib.esm.js',
+    sha256: '23a36609cf4633e10e486095c151dabb8d75a8a667402d092f47dbde7f7d52b5',
     sizeHint: '1.5 MB',
   },
   'pdfjs': {

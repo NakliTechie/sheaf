@@ -8,7 +8,7 @@
 // agent catalog. pdf-lib runs in Node, so the deterministic core is provable with
 // no browser. Run: `node test/m0-replay.mjs`.
 
-import * as PDFLib from '../engines/pdf-lib/1.17.1/pdf-lib.esm.js';
+import * as PDFLib from '../engines/pdf-lib/2.9.1/pdf-lib.esm.js';
 const { PDFDocument } = PDFLib;
 import { registerEngine } from '../src/core/engines.js';
 import { registerOps } from '../src/ops/index.js';

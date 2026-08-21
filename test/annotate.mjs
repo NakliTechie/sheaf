@@ -2,7 +2,7 @@
 // Each applies, preserves page count, yields a reloadable PDF, validates its
 // normalized coords through the single ingress, and is byte-deterministic.
 
-import * as PDFLib from '../engines/pdf-lib/1.17.1/pdf-lib.esm.js';
+import * as PDFLib from '../engines/pdf-lib/2.9.1/pdf-lib.esm.js';
 const { PDFDocument } = PDFLib;
 import { registerEngine } from '../src/core/engines.js';
 import { registerOps } from '../src/ops/index.js';

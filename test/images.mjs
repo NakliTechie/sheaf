@@ -1,7 +1,7 @@
 // test/images.mjs — images → PDF (pages.insertImages). Embeds a real 1x1 PNG and a
 // real JPEG as pages and checks the page count + sizing + ingress validation.
 
-import * as PDFLib from '../engines/pdf-lib/1.17.1/pdf-lib.esm.js';
+import * as PDFLib from '../engines/pdf-lib/2.9.1/pdf-lib.esm.js';
 const { PDFDocument } = PDFLib;
 import { registerEngine } from '../src/core/engines.js';
 import { registerOps } from '../src/ops/index.js';

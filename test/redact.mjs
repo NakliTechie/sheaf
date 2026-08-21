@@ -3,7 +3,7 @@
 // over secret text and assert its bytes are GONE from the decoded content stream,
 // while text outside the box survives.
 
-import * as PDFLib from '../engines/pdf-lib/1.17.1/pdf-lib.esm.js';
+import * as PDFLib from '../engines/pdf-lib/2.9.1/pdf-lib.esm.js';
 const { PDFDocument, StandardFonts, PDFArray, decodePDFRawStream } = PDFLib;
 import { registerEngine } from '../src/core/engines.js';
 import { registerOps } from '../src/ops/index.js';

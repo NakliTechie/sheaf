@@ -3,7 +3,7 @@
 // and — critically — is DETERMINISTIC: the same op on the same input yields identical
 // bytes (no timestamps, no randomness), so marks replay and pipeline cleanly.
 
-import * as PDFLib from '../engines/pdf-lib/1.17.1/pdf-lib.esm.js';
+import * as PDFLib from '../engines/pdf-lib/2.9.1/pdf-lib.esm.js';
 const { PDFDocument } = PDFLib;
 import { registerEngine } from '../src/core/engines.js';
 import { registerOps } from '../src/ops/index.js';
