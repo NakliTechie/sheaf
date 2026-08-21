@@ -79,7 +79,7 @@ function positionTour() {
 
   const card = layer.querySelector('.tour-card');
   const cardRect = card.getBoundingClientRect();
-  const gap = 18;
+  const gap = 24; // clearance between the spotlight and the card (UX-L2 — more breathing room)
   const margin = 12;
   let top;
   let left;

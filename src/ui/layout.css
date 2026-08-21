@@ -41,7 +41,15 @@
 .btn svg { width: 18px; height: 18px; display: block; }
 .btn .label { font-size: 13px; }
 .btn.tool.active { background: var(--accent); color: var(--accent-fg); }
-.color-swatch { width: 28px; height: 28px; padding: 0; border: 1px solid var(--panel-border); border-radius: var(--r-sm); background: none; cursor: pointer; }
+.color-swatch { width: 32px; height: 32px; padding: 0; border: 1px solid var(--panel-border); border-radius: var(--r-sm); background: none; cursor: pointer; }
+
+/* Touch devices: comfortable ≥44px tap targets (UX-L1). Desktop mouse keeps the compact
+   34px; the responsive fit() still folds overflow into the More menu at any size. */
+@media (pointer: coarse) {
+  .btn { height: 44px; }
+  .btn.icon { width: 44px; }
+  .color-swatch { width: 40px; height: 40px; }
+}
 
 /* Overflow "More" menu — the page ops folded out of the toolbar, as a vertical list. */
 .menu-list { display: flex; flex-direction: column; gap: 4px; min-width: 240px; }
