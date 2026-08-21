@@ -25,12 +25,22 @@ export class History {
     this._ops.push({ op, params });
 
     if (this._ops.length > MAX_STEPS) {
-      const removed = this._ops.length - MAX_STEPS;
-      this._ops = this._ops.slice(removed);
-      this._snaps = this._snaps
-        .filter(s => s.pointer >= removed)
-        .map(s => ({ ...s, pointer: s.pointer - removed }));
-      this._pointer = Math.max(-1, this._pointer - removed);
+      // Trim the front, but ONLY down to an existing snapshot: that snapshot's bytes
+      // become the new origin (relabelled pointer -1) and the ops after it replay on top.
+      // Dropping the floor without a replacement breaks replayFromFloor + undo (H1) — so
+      // if no interior snapshot exists yet, keep the full log rather than orphan the floor.
+      const want = this._ops.length - MAX_STEPS;
+      const floorSnap = this._snaps
+        .filter(s => s.pointer >= 0 && s.pointer >= want - 1)
+        .sort((a, b) => a.pointer - b.pointer)[0];
+      if (floorSnap) {
+        const cut = floorSnap.pointer + 1;
+        this._ops = this._ops.slice(cut);
+        this._snaps = this._snaps
+          .filter(s => s.pointer >= floorSnap.pointer)
+          .map(s => ({ ...s, pointer: s.pointer - cut }));   // floorSnap → pointer -1
+        this._pointer = Math.max(-1, this._pointer - cut);
+      }
     }
     this._pointer = this._ops.length - 1;
     return this._pointer;
