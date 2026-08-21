@@ -23,6 +23,7 @@ import { initFindbar, openFindbar } from './ui/findbar.js';
 import { initRecovery } from './ui/recovery.js';
 import { openPdf, savePdf, savePdfAs, openFolder, nextFile, prevFile } from './ui/fileops.js';
 import { openHelp } from './ui/help.js';
+import { showTour } from './ui/tour.js';
 
 function probe() {
   const ok = typeof crypto !== 'undefined' && crypto.subtle && 'indexedDB' in window;
@@ -103,6 +104,11 @@ function boot() {
   // Detect the AI ladder in the background (probes localhost; quiet if nothing's there).
   // The tool is fully usable before/without this — the no-AI ground floor.
   initAi().catch(() => {});
+
+  // First-run walkthrough: self-gates on localStorage, so it shows once and never again
+  // unless replayed from Help. Deferred so the toolbar + empty-state are real tour targets.
+  // Skipped in agent/URL mode, where a document is already being driven programmatically.
+  if (!state.doc) setTimeout(() => showTour(), 500);
 
   console.log('[sheaf] ready —', document.getElementById('app').dataset.version);
 }

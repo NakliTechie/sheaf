@@ -106,7 +106,7 @@ function render(version) {
     el('div.sep'),
     buildPageOps(),
     el('div.sep'),
-    (toolsGroup = el('div.group', {}, [
+    (toolsGroup = el('div.group', { id: 'tb-tools' }, [
       toolBtn('cursor', null, 'Select'),
       toolBtn('highlight', 'highlight', 'Highlight'),
       toolBtn('square', 'rect', 'Rectangle'),
@@ -125,10 +125,10 @@ function render(version) {
     (fname = el('div.fname', { text: '' })),
     el('div.sep'),
     el('div.group', {}, [
-      btn('ai', '', openSidecarMenu, { needsDoc: true }),
+      btn('ai', '', openSidecarMenu, { needsDoc: true, id: 'tb-ai' }),
       btn(document.documentElement.getAttribute('data-theme') === 'light' ? 'moon' : 'sun', '', toggleTheme, { id: 'btn-theme' }),
       btn('settings', '', openSettings),
-      btn('help', '', openHelp),
+      btn('help', '', openHelp, { id: 'tb-help' }),
     ]),
   );
 }

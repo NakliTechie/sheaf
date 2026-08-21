@@ -4,9 +4,10 @@
 import { el } from './dom.js';
 import { openModal } from './modal.js';
 import { keyboard } from '../core/keyboard.js';
+import { showTour } from './tour.js';
 
 export function openHelp() {
-  const content = () => el('div', { style: 'display:flex;flex-direction:column;gap:14px' }, [
+  const content = ({ close }) => el('div', { style: 'display:flex;flex-direction:column;gap:14px' }, [
     el('p', { html: '<b>Sheaf</b> is a browser-native PDF editor. Your document is opened straight off your disk, edited entirely in this tab, and saved back — <b>nothing is uploaded</b>. Merge, reorder, rotate, delete pages, edit metadata, and more.' }),
     el('div', {}, [
       el('div', { text: 'Keyboard', style: 'font-size:13px;color:var(--fg-muted);margin-bottom:6px' }),
@@ -17,6 +18,12 @@ export function openHelp() {
         ])),
     ]),
     el('p', { style: 'font-size:12px;color:var(--fg-faint)', html: 'Tip: select pages in the left rail (click, ⇧-click for a range, ⌘/Ctrl-click to add) — page operations act on the selection. Drag a thumbnail to reorder.' }),
+    el('div', {}, [
+      el('button', {
+        class: 'btn', type: 'button',
+        onClick: () => { close(true); setTimeout(() => showTour({ force: true }), 0); },
+      }, [el('span.label', { text: 'Take the quick tour' })]),
+    ]),
   ]);
   return openModal({ title: 'Help', content, actions: [{ label: 'Close', kind: 'primary', value: true }] });
 }
