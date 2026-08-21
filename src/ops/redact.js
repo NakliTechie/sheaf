@@ -87,12 +87,24 @@ export function redactTokens(toks, boxes, defaultFontSize = 12) {
   let dirty = false;             // did any show-operator actually get emptied?
   const stack = [];
 
-  const overlaps = (x, y, w, fs) => boxes.some(b =>
-    y + fs * 0.2 >= b.y0 && y <= b.y1 && x + w >= b.x0 && x <= b.x1);
+  // M1: convert the text-space run into page space using the text matrix scale, and bias
+  // toward OVER-removal (redaction must never leave targeted text behind because an estimate
+  // ran short). HSCALE/VSCALE are the axis-aligned scale factors from Tm; a rotated/skewed
+  // matrix (tm[1] or tm[2] != 0) is NOT resolved here — those runs are reported as residue
+  // to the C1 honesty layer rather than silently mistracked.
+  const HSCALE = () => (Math.abs(tm[0]) > 1e-6 ? Math.abs(tm[0]) : 1);
+  const VSCALE = () => (Math.abs(tm[3]) > 1e-6 ? Math.abs(tm[3]) : 1);
 
-  const showWidth = (tok) => {
+  // Generous vertical band around the baseline (ascent 0.85em, descent 0.25em) and a slightly
+  // high 0.55em per-glyph advance — both err toward covering, not missing.
+  const overlaps = (x, y, wPage) => {
+    const asc = fontSize * 0.85 * VSCALE(), desc = fontSize * 0.25 * VSCALE();
+    return boxes.some(b => x + wPage >= b.x0 && x <= b.x1 && y + asc >= b.y0 && y - desc <= b.y1);
+  };
+
+  const showWidth = (tok) => { // text-space advance estimate (biased slightly high)
     const glyphs = tok.kind === 'hex' ? hexLen(tok.raw) : litLen(tok.raw);
-    return glyphs * fontSize * 0.5; // average glyph advance estimate
+    return glyphs * fontSize * 0.55;
   };
 
   for (let k = 0; k < toks.length; k++) {
@@ -120,17 +132,18 @@ export function redactTokens(toks, boxes, defaultFontSize = 12) {
     function maybeRedact() {
       const tok = stack[stack.length - 1];
       if (!tok || tok.type !== 'str') return;
-      const w = showWidth(tok);
-      if (overlaps(tm[4], tm[5], w, fontSize)) { tok.raw = tok.kind === 'hex' ? '<>' : '()'; dirty = true; }
-      tm = [tm[0], tm[1], tm[2], tm[3], tm[4] + w, tm[5]];
+      const wPage = showWidth(tok) * HSCALE();
+      if (overlaps(tm[4], tm[5], wPage)) { tok.raw = tok.kind === 'hex' ? '<>' : '()'; dirty = true; }
+      tm = [tm[0], tm[1], tm[2], tm[3], tm[4] + wPage, tm[5]];
     }
     function maybeRedactArray() {
       const arr = stack[stack.length - 1];
       if (!arr || arr.type !== 'arr') return;
+      const hs = HSCALE();
       let x = tm[4];
       for (const item of arr.items) {
-        if (typeof item === 'number') { x -= (item / 1000) * fontSize; continue; }
-        if (item && item.type === 'str') { const w = showWidth(item); if (overlaps(x, tm[5], w, fontSize)) { item.raw = item.kind === 'hex' ? '<>' : '()'; dirty = true; } x += w; }
+        if (typeof item === 'number') { x -= (item / 1000) * fontSize * hs; continue; }
+        if (item && item.type === 'str') { const wPage = showWidth(item) * hs; if (overlaps(x, tm[5], wPage)) { item.raw = item.kind === 'hex' ? '<>' : '()'; dirty = true; } x += wPage; }
       }
       tm = [tm[0], tm[1], tm[2], tm[3], x, tm[5]];
     }

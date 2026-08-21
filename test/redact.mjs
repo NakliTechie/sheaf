@@ -103,6 +103,19 @@ async function main() {
   const after2 = await decodedContent(await state.doc.toBytes());
   ok('secret split across the array boundary is removed', !after2.includes('5365637265743132'));
 
+  console.log('\nM1 — horizontal text-matrix scale is applied to the advance (no drift)');
+  // 10 glyphs, fontSize 10, horizontal scale tm[0]=2 → the run really spans x=50..~160.
+  // With the old scale-blind estimate the tracker reached only x≈105, so a box over the
+  // run's right end (x=140..155) was MISSED and the text survived. Scaled, it redacts.
+  const scaled = 'BT /F1 10 Tf 2 0 0 1 50 400 Tm <53656372657431323334> Tj ET';
+  const m1 = redactTokens(tokenize(scaled), [{ x0: 140, y0: 395, x1: 155, y1: 410 }]);
+  ok('scaled run redacted at its true (scaled) extent', m1.dirty === true);
+  ok('scaled secret bytes emptied', !m1.text.includes('53656372657431323334'));
+  // Control: the same box on an UNscaled run (tm[0]=1, real extent x=50..~105) must NOT hit.
+  const unscaled = 'BT /F1 10 Tf 1 0 0 1 50 400 Tm <53656372657431323334> Tj ET';
+  const m1c = redactTokens(tokenize(unscaled), [{ x0: 140, y0: 395, x1: 155, y1: 410 }]);
+  ok('unscaled run past the box is not touched (no over-reach)', m1c.dirty === false);
+
   console.log('\nIngress');
   let threw = false; try { await dispatch('redact.region', { page: 9, x: 0, y: 0, w: 1, h: 0.1 }); } catch { threw = true; }
   ok('out-of-range page rejected', threw);
