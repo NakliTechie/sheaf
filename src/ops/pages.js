@@ -36,7 +36,7 @@ async function rebuildFromOrder(src, order) {
   return new SheafDoc(out, null);
 }
 
-function carryMetadata(src, out) {
+export function carryMetadata(src, out) {
   const move = (get, set, transform) => {
     try { const v = src[get](); if (v != null) out[set](transform ? transform(v) : v); } catch {}
   };
@@ -57,14 +57,15 @@ export const ops = [
     agentCallable: true,
     params: {
       pages: { type: 'array', required: true, items: { type: 'int', min: 0 }, minItems: 1 },
-      angle: { type: 'int', required: true, enum: undefined },
+      angle: { type: 'int', required: true },
     },
     run(doc, { pages, angle }) {
       if (angle % 90 !== 0) throw new Error('Rotation angle must be a multiple of 90');
       assertPages(pages, doc.pageCount());
       const { degrees } = lib();
       const ps = doc.pdf.getPages();
-      for (const i of pages) {
+      // Dedupe: rotate is a per-page delta, so a repeated index would compound (0,0 → 180°).
+      for (const i of new Set(pages)) {
         const cur = ps[i].getRotation().angle;
         ps[i].setRotation(degrees(norm360(cur + angle)));
       }
@@ -183,7 +184,8 @@ export const ops = [
     run(doc, { pages, factor }) {
       assertPages(pages, doc.pageCount());
       const ps = doc.pdf.getPages();
-      for (const i of pages) ps[i].scale(factor, factor);
+      // Dedupe: scale multiplies, so a repeated index would compound (2,2 → 4×).
+      for (const i of new Set(pages)) ps[i].scale(factor, factor);
       return { doc };
     },
   },

@@ -4,10 +4,9 @@
 
 import { el, clear } from './dom.js';
 import { icon } from './icons.js';
-import { state } from '../core/state.js';
-import { on, emit } from '../core/events.js';
+import { state, savePrefs } from '../core/state.js';
+import { on } from '../core/events.js';
 import { dispatch, undo, redo, historyStatus } from '../core/runner.js';
-import { savePrefs } from '../core/state.js';
 import { selectedPages } from './thumbs.js';
 import { openModal, confirmModal, formModal } from './modal.js';
 import { toast } from './toast.js';

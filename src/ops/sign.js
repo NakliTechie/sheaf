@@ -1,8 +1,8 @@
 // ops/sign.js — appearance signing. Places a typed signature (and optional date line)
 // onto the page. The date is a PARAMETER, not the clock, so the op stays deterministic
-// and replayable — the UI passes today's date. Drawn/image signatures and a saved
-// signature library ride the storage façade and land as a v1.x enrichment; the
-// deterministic appearance-sign is the v1.0 floor.
+// and replayable — the UI passes today's date. Drawn/image signatures and the saved
+// signature library (storage façade, ui/signature.js) shipped in M4; the deterministic
+// appearance-sign is the v1.0 floor.
 //
 // Cryptographic (PAdES) signing is a separate, later tier (handoff v1.2, WebCrypto) —
 // this is the visible-appearance signature, explicitly not a cryptographic guarantee.

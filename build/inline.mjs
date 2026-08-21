@@ -125,11 +125,18 @@ const css = collectCss(SRC);
 const template = readFileSync(join(SRC, 'index.html'), 'utf8');
 const jsHash = createHash('sha256').update(inlineJs).digest('hex').slice(0, 12);
 
+// Stamp VERSION into the two version placeholders. Match the actual attributes (not a
+// hardcoded version literal) and assert both exist — a silently-unmatched replace would
+// ship a stale/unstamped version with no error (forward-pass S2).
+const versionTargets = [/<meta name="sheaf-version" content="[^"]*">/, /data-version="[^"]*"/];
+for (const re of versionTargets) {
+  if (!re.test(template)) throw new Error(`Build: version placeholder ${re} not found in src/index.html`);
+}
 let html = template
   .replace(/<link rel="stylesheet" href="[^"]*">\s*/g, '')
   .replace(/<script type="module" src="[^"]*"><\/script>/, '')
-  .replace(/content="0\.1\.0"/, `content="${VERSION}"`)
-  .replace(/data-version="0\.1\.0"/, `data-version="${VERSION}"`)
+  .replace(/(<meta name="sheaf-version" content=")[^"]*(">)/, `$1${VERSION}$2`)
+  .replace(/(data-version=")[^"]*(")/, `$1${VERSION}$2`)
   .replace('</head>', `<style>\n${css}\n</style>\n</head>`)
   .replace('</body>', `<script type="module">\n${inlineJs}\n</script>\n</body>`);
 

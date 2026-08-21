@@ -25,9 +25,8 @@ function comboOf(ev) {
   if (ev.shiftKey) parts.push('shift');
   if (ev.altKey) parts.push('alt');
   let k = ev.key;
-  if (k === ' ') k = 'space';
-  else if (k.length === 1) k = k.toLowerCase();
-  else k = k.toLowerCase(); // 'ArrowDown' -> 'arrowdown', 'Escape' -> 'escape'
+  // Normalize: space is named, everything else lowercased ('ArrowDown' -> 'arrowdown').
+  k = k === ' ' ? 'space' : k.toLowerCase();
   parts.push(k);
   return parts.join('+');
 }
