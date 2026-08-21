@@ -6,13 +6,7 @@
 
 import { openForRender, pageText } from '../core/render.js';
 import { getEngine } from '../core/engines.js';
-
-function dataUrlToBytes(dataUrl) {
-  const bin = atob(dataUrl.slice(dataUrl.indexOf(',') + 1));
-  const u8 = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-  return u8;
-}
+import { dataUrlToBytes } from './_util.js';
 
 export const ops = [
   {

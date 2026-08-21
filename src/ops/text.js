@@ -13,9 +13,9 @@
 
 import { getEngine } from '../core/engines.js';
 import { winAnsiSafe } from './textsafe.js';
+import { hexToRgb } from './_util.js';
 
 function lib() { return getEngine('pdf-lib'); }
-function hexToRgb(hex, fb) { const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || '')); if (!m) return fb; const n = parseInt(m[1], 16); return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; }
 
 // Map a detected family + weight + slant to the closest Standard-14 face. These are
 // the fonts pdf-lib embeds without fontkit, so this works for any replacement text.

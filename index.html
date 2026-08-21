@@ -1425,6 +1425,31 @@ function winAnsiSafe(input) {
 return { winAnsiSafe };
 })();
 
+/* ops/_util.js */
+const __m_ops__util = (() => {
+// _util.js — small shared helpers for ops (kept DRY: hex-colour parsing + data-URL decode).
+// These were duplicated across annotate/marks/text/sign (hexToRgb) and convert/compress
+// (dataUrlToBytes); one definition each so a fix lands in one place.
+
+// "#rrggbb" (or "rrggbb") → [r,g,b] in 0..1; `fallback` if the string isn't a 6-hex colour.
+function hexToRgb(hex, fallback = [0, 0, 0]) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
+  if (!m) return fallback;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
+}
+
+// "data:<mime>;base64,XXXX" → Uint8Array of the decoded bytes.
+function dataUrlToBytes(dataUrl) {
+  const bin = atob(dataUrl.slice(dataUrl.indexOf(',') + 1));
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8;
+}
+
+return { hexToRgb, dataUrlToBytes };
+})();
+
 /* ops/marks.js */
 const __m_ops_marks = (() => {
 // ops/marks.js — page marks (pdf-lib): watermark, page numbers, Bates numbering,
@@ -1433,15 +1458,9 @@ const __m_ops_marks = (() => {
 
 const getEngine = __m_core_engines.getEngine;
 const winAnsiSafe = __m_ops_textsafe.winAnsiSafe;
+const hexToRgb = __m_ops__util.hexToRgb;
 
 function lib() { return getEngine('pdf-lib'); }
-
-function hexToRgb(hex, fallback = [0, 0, 0]) {
-  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
-  if (!m) return fallback;
-  const n = parseInt(m[1], 16);
-  return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
-}
 
 function resolvePages(doc, pages) {
   const count = doc.pageCount();
@@ -1618,15 +1637,9 @@ const __m_ops_annotate = (() => {
 
 const getEngine = __m_core_engines.getEngine;
 const winAnsiSafe = __m_ops_textsafe.winAnsiSafe;
+const hexToRgb = __m_ops__util.hexToRgb;
 
 function lib() { return getEngine('pdf-lib'); }
-
-function hexToRgb(hex, fallback = [0, 0, 0]) {
-  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
-  if (!m) return fallback;
-  const n = parseInt(m[1], 16);
-  return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
-}
 
 function pageOf(doc, i) {
   const count = doc.pageCount();
@@ -1860,9 +1873,9 @@ const __m_ops_text = (() => {
 
 const getEngine = __m_core_engines.getEngine;
 const winAnsiSafe = __m_ops_textsafe.winAnsiSafe;
+const hexToRgb = __m_ops__util.hexToRgb;
 
 function lib() { return getEngine('pdf-lib'); }
-function hexToRgb(hex, fb) { const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || '')); if (!m) return fb; const n = parseInt(m[1], 16); return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; }
 
 // Map a detected family + weight + slant to the closest Standard-14 face. These are
 // the fonts pdf-lib embeds without fontkit, so this works for any replacement text.
@@ -2131,6 +2144,7 @@ const __m_ops_sign = (() => {
 
 const getEngine = __m_core_engines.getEngine;
 const winAnsiSafe = __m_ops_textsafe.winAnsiSafe;
+const hexToRgb = __m_ops__util.hexToRgb;
 
 const ops = [
   {
@@ -2153,8 +2167,7 @@ const ops = [
       const { width: W, height: H } = page.getSize();
       const font = await doc.pdf.embedFont(StandardFonts.HelveticaOblique);
       const small = await doc.pdf.embedFont(StandardFonts.Helvetica);
-      const m = /^#?([0-9a-f]{6})$/i.exec(p.color);
-      const [r, g, b] = m ? [(parseInt(m[1], 16) >> 16 & 255) / 255, (parseInt(m[1], 16) >> 8 & 255) / 255, (parseInt(m[1], 16) & 255) / 255] : [0.1, 0.23, 0.56];
+      const [r, g, b] = hexToRgb(p.color, [0.1, 0.23, 0.56]);
       const x = p.x * W, yTop = H * (1 - p.y);
       page.drawText(winAnsiSafe(p.name), { x, y: yTop - p.fontSize, size: p.fontSize, font, color: rgb(r, g, b) });
       // Underline + optional date.
@@ -2288,13 +2301,7 @@ const __m_ops_convert = (() => {
 const openForRender = __m_core_render.openForRender;
 const pageText = __m_core_render.pageText;
 const getEngine = __m_core_engines.getEngine;
-
-function dataUrlToBytes(dataUrl) {
-  const bin = atob(dataUrl.slice(dataUrl.indexOf(',') + 1));
-  const u8 = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-  return u8;
-}
+const dataUrlToBytes = __m_ops__util.dataUrlToBytes;
 
 const ops = [
   {
@@ -2591,14 +2598,7 @@ const openForRender = __m_core_render.openForRender;
 const SheafDoc = __m_core_doc.SheafDoc;
 // one canonical metadata-carry (keywords/creator/producer included)
 const carryMetadata = __m_ops_pages.carryMetadata;
-
-function dataUrlToBytes(dataUrl) {
-  const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
-  const bin = atob(b64);
-  const u8 = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-  return u8;
-}
+const dataUrlToBytes = __m_ops__util.dataUrlToBytes;
 
 const ops = [
   {

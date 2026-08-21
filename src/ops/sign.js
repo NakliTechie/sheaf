@@ -9,6 +9,7 @@
 
 import { getEngine } from '../core/engines.js';
 import { winAnsiSafe } from './textsafe.js';
+import { hexToRgb } from './_util.js';
 
 export const ops = [
   {
@@ -31,8 +32,7 @@ export const ops = [
       const { width: W, height: H } = page.getSize();
       const font = await doc.pdf.embedFont(StandardFonts.HelveticaOblique);
       const small = await doc.pdf.embedFont(StandardFonts.Helvetica);
-      const m = /^#?([0-9a-f]{6})$/i.exec(p.color);
-      const [r, g, b] = m ? [(parseInt(m[1], 16) >> 16 & 255) / 255, (parseInt(m[1], 16) >> 8 & 255) / 255, (parseInt(m[1], 16) & 255) / 255] : [0.1, 0.23, 0.56];
+      const [r, g, b] = hexToRgb(p.color, [0.1, 0.23, 0.56]);
       const x = p.x * W, yTop = H * (1 - p.y);
       page.drawText(winAnsiSafe(p.name), { x, y: yTop - p.fontSize, size: p.fontSize, font, color: rgb(r, g, b) });
       // Underline + optional date.
