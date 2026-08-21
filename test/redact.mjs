@@ -73,6 +73,36 @@ async function main() {
   const clean = redactTokens(tokenize(stream), [{ x0: 0, y0: 0, x1: 1, y1: 1 }]); // box matches nothing
   ok('no match → not dirty', clean.dirty === false);
 
+  console.log('\nL1 — inline-image bytes are byte-exact through a redaction (no one-byte shift)');
+  // The image payload has an odd length and non-ASCII bytes; a stray extra delimiter space
+  // would corrupt it. Redact the secret below the image, then assert EI-delimited payload
+  // length is unchanged.
+  const payload = '\x00\xff\x10(a)\x7f\x80'; // 8 bytes incl. an unbalanced-looking '(a)'
+  const l1Stream =
+    `q 100 0 0 100 50 480 cm BI /W 2 /H 2 /BPC 8 ID ${payload} EI Q\n` +
+    `BT /F1 12 Tf 1 0 0 1 50 400 Tm <5365637265743132> Tj ET`;
+  const l1 = redactTokens(tokenize(l1Stream), [{ x0: 0, y0: 390, x1: 600, y1: 412 }]);
+  ok('secret below image removed', !l1.text.includes('5365637265743132'));
+  const between = l1.text.slice(l1.text.indexOf('ID ') + 3, l1.text.indexOf(' EI'));
+  ok('inline-image payload identical length (byte-exact)', between === payload);
+
+  console.log('\nM2 — Tj split across a Contents ARRAY boundary is redacted (concat-then-tokenize)');
+  // Two content streams: stream 1 opens BT + sets the text matrix over the secret; stream 2
+  // (a separate Contents-array element) carries the Tj. Tokenized independently, stream 2 has
+  // no Tm so the position is unknown and the secret survives. Concatenated, it redacts.
+  const d2 = await PDFDocument.create();
+  const p2 = d2.addPage([300, 200]);
+  const ctx2 = d2.context;
+  const { PDFName: N2 } = PDFLib;
+  const s1 = ctx2.flateStream(new TextEncoder().encode('BT /F1 14 Tf 1 0 0 1 40 150 Tm '));
+  const s2 = ctx2.flateStream(new TextEncoder().encode('<5365637265743132> Tj ET'));
+  p2.node.set(N2.of('Contents'), ctx2.obj([ctx2.register(s1), ctx2.register(s2)]));
+  const src2 = await d2.save({ updateMetadata: false });
+  await dispatch('open.bytes', { bytes: src2 });
+  await dispatch('redact.region', { page: 0, x: 0, y: 0.2, w: 1, h: 0.15 });
+  const after2 = await decodedContent(await state.doc.toBytes());
+  ok('secret split across the array boundary is removed', !after2.includes('5365637265743132'));
+
   console.log('\nIngress');
   let threw = false; try { await dispatch('redact.region', { page: 9, x: 0, y: 0, w: 1, h: 0.1 }); } catch { threw = true; }
   ok('out-of-range page rejected', threw);

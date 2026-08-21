@@ -2069,6 +2069,10 @@ function tokenize(str) {
     // desyncs text-position tracking and redaction silently targets the wrong glyphs
     // (or misses, while still drawing the reassuring black box). Capture verbatim.
     if (raw === 'ID') {
+      // Exactly one whitespace separates `ID` from the binary image data (PDF 8.9.7).
+      // Consume it so the captured raw is the image bytes ALONE — reconstruct() re-emits the
+      // single delimiter space, avoiding a one-byte shift into the image data (L1).
+      if (i < n && WS.has(str[i])) i++;
       let k = i;
       while (k < n) {
         if (WS.has(str[k]) && str[k + 1] === 'E' && str[k + 2] === 'I' && (k + 3 >= n || WS.has(str[k + 3]) || DELIM.has(str[k + 3]))) break;
@@ -2156,7 +2160,18 @@ function reconstruct(toks) {
   // arrays were only views over those tokens; the underlying string tokens were
   // mutated in place, so re-joining the original token list reproduces the stream
   // with redacted strings emptied.
-  return toks.map(t => t.raw).join(' ');
+  //
+  // Structure-aware spacing (L1): a `raw` inline-image token carries the exact image
+  // bytes (leading delimiter already stripped in tokenize). Emit it as one delimiter
+  // space + the bytes verbatim — a blanket ` `.join() would inject an extra space and
+  // shift the image data by a byte. Every other token is space-separated as before.
+  let out = '';
+  for (const t of toks) {
+    if (t.type === 'raw') { out += ' ' + t.raw; continue; }
+    if (out.length) out += ' ';
+    out += t.raw;
+  }
+  return out;
 }
 
 // ── The op ──────────────────────────────────────────────────────────────────────
@@ -2180,24 +2195,30 @@ const ops = [
       const { width: W, height: H } = page.getSize();
       const box = rectToPdf(W, H, p.x, p.y, p.w, p.h);
 
-      // Surgery on every content stream of the page.
+      // Content-stream surgery. M2: a page's content may be split across a Contents ARRAY,
+      // and a Tj/Tm can straddle the boundary between two array elements — tokenizing each
+      // element independently desyncs position tracking or misses the split operator. PDF
+      // readers treat the array as one logical stream (concatenated with whitespace), so we
+      // do the same: decode every element, join with a newline, tokenize/redact ONCE, and
+      // write the result back as a single stream. Undecodable content leaves the page's
+      // streams untouched (the box still covers it) and is reported as residue for C1.
       const ctx = doc.pdf.context;
-      let entry = page.node.Contents();
+      const entry = page.node.Contents();
       const refs = entry instanceof PDFArray ? entry.asArray() : (entry ? [entry] : []);
-      const newRefs = [];
+      let buf = '';
+      let decodable = refs.length > 0;
       for (const ref of refs) {
-        const stream = ctx.lookup(ref);
-        let text;
-        try { text = new TextDecoder('latin1').decode(decodePDFRawStream(stream).decode()); }
-        catch { newRefs.push(ref); continue; } // can't decode — leave it; the box still covers it
-        const { text: redacted, dirty } = redactTokens(tokenize(text), [box]);
-        // Only re-encode streams a redaction actually fired on. Untouched streams stay
-        // byte-for-byte intact (no whitespace re-flow, no risk to inline images, faster).
-        if (!dirty) { newRefs.push(ref); continue; }
-        newRefs.push(ctx.register(ctx.flateStream(new TextEncoder().encode(redacted))));
+        try { buf += (buf ? '\n' : '') + new TextDecoder('latin1').decode(decodePDFRawStream(ctx.lookup(ref)).decode()); }
+        catch { decodable = false; break; } // one bad stream → don't half-rewrite the page
       }
-      if (newRefs.length === 1) page.node.set(PDFName.of('Contents'), newRefs[0]);
-      else if (newRefs.length) page.node.set(PDFName.of('Contents'), ctx.obj(newRefs));
+      let dirty = false;
+      if (decodable && buf) {
+        const r = redactTokens(tokenize(buf), [box]);
+        dirty = r.dirty;
+        // Only re-encode when a redaction actually fired. A no-match page keeps its original
+        // streams byte-for-byte (no whitespace re-flow, no inline-image risk, faster).
+        if (dirty) page.node.set(PDFName.of('Contents'), ctx.register(ctx.flateStream(new TextEncoder().encode(r.text))));
+      }
 
       // Visible marker: opaque black box on top.
       page.drawRectangle({ x: box.x0, y: box.y0, width: box.x1 - box.x0, height: box.y1 - box.y0, color: rgb(0, 0, 0) });
