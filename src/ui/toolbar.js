@@ -152,6 +152,7 @@ function buildPageOps() {
     make('insert', 'insert', 'Insert blank page',   onInsert),
     make('scale',  'scale',  'Scale pages…',        onScale),
     make('merge',  'merge',  'Merge a PDF in…',     mergePdf),
+    make('reorder','reorder','Reverse page order',   () => dispatch('pages.reverse', {})),
     make('mark',   'mark',   'Add marks…',          openMarksMenu),
     make('forms',  'forms',  'Edit form fields…',   openFormsDialog),
     make('ocr',    'ocr',    'OCR text layer…',     openOcrMenu),

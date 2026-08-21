@@ -131,6 +131,18 @@ export const ops = [
   },
 
   {
+    id: 'pages.reverse', label: 'Reverse page order', group: 'page', icon: 'reorder',
+    description: 'Reverse the order of all pages in the document.',
+    agentCallable: true,
+    params: {},
+    async run(doc) {
+      const count = doc.pageCount();
+      const order = [...Array(count).keys()].reverse();
+      return { doc: await rebuildFromOrder(doc, order) };
+    },
+  },
+
+  {
     id: 'pages.duplicate', label: 'Duplicate pages', group: 'page', icon: 'copy',
     description: 'Insert a copy of each given page directly after the original.',
     agentCallable: true,

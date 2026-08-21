@@ -5,6 +5,7 @@
 // is an open-side flow) — flagged here so the convert group's scope is explicit.
 
 import { openForRender, pageText } from '../core/render.js';
+import { getEngine } from '../core/engines.js';
 
 function dataUrlToBytes(dataUrl) {
   const bin = atob(dataUrl.slice(dataUrl.indexOf(',') + 1));
@@ -50,6 +51,25 @@ export const ops = [
       for (let i = 0; i < pdf.numPages; i++) pages.push(await pageText(pdf, i));
       pdf.destroy?.();
       return { artifact: { text: pages.join('\n\n'), pageCount: pages.length, pages } };
+    },
+  },
+
+  {
+    id: 'convert.split', label: 'Split to files', group: 'convert', icon: 'extract',
+    description: 'Split the document into one single-page PDF per page. Returns an artifact list of { name, bytes } for the UI to bundle into a zip. Does not change the document.',
+    agentCallable: true, mutates: false,
+    params: {},
+    async run(doc) {
+      const { PDFDocument } = getEngine('pdf-lib');
+      const n = doc.pageCount();
+      const files = [];
+      for (let i = 0; i < n; i++) {
+        const out = await PDFDocument.create();
+        const [pg] = await out.copyPages(doc.pdf, [i]);
+        out.addPage(pg);
+        files.push({ name: `page-${String(i + 1).padStart(3, '0')}.pdf`, bytes: await out.save({ updateMetadata: false }) });
+      }
+      return { artifact: { files, count: n } };
     },
   },
 ];

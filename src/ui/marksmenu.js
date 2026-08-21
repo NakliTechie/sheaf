@@ -17,6 +17,7 @@ export function openMarksMenu() {
     item('Page numbers', 'Stamp {n} or {n} / {total}', addPageNumbers),
     item('Bates numbering', 'Sequential prefix + counter (legal)', addBates),
     item('Header / footer', 'Fixed text at a chosen corner', addHeaderFooter),
+    item('Page border', 'Rectangular frame inset from the edge', addBorder),
   ]); };
   return openModal({ title: 'Add marks', content, actions: [{ label: 'Close', value: true }] });
 }
@@ -56,4 +57,13 @@ async function addHeaderFooter() {
       options: ['top-center', 'top-left', 'top-right', 'bottom-center', 'bottom-left', 'bottom-right'].map(o => ({ value: o, label: o })) },
   ]);
   if (v?.text) dispatch('marks.text', v);
+}
+
+async function addBorder() {
+  const v = await formModal('Page border', [
+    { name: 'margin', label: 'Inset from edge (pt)', type: 'number', value: 24 },
+    { name: 'thickness', label: 'Line thickness (pt)', type: 'number', value: 1.5 },
+    { name: 'color', label: 'Colour (hex)', value: '#333333' },
+  ]);
+  if (v) dispatch('marks.border', v);
 }

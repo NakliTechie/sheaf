@@ -1202,6 +1202,18 @@ const ops = [
   },
 
   {
+    id: 'pages.reverse', label: 'Reverse page order', group: 'page', icon: 'reorder',
+    description: 'Reverse the order of all pages in the document.',
+    agentCallable: true,
+    params: {},
+    async run(doc) {
+      const count = doc.pageCount();
+      const order = [...Array(count).keys()].reverse();
+      return { doc: await rebuildFromOrder(doc, order) };
+    },
+  },
+
+  {
     id: 'pages.duplicate', label: 'Duplicate pages', group: 'page', icon: 'copy',
     description: 'Insert a copy of each given page directly after the original.',
     agentCallable: true,
@@ -1526,6 +1538,30 @@ const ops = [
         const tw = font.widthOfTextAtSize(safe, fontSize);
         const [x, y] = place(position, width, height, tw, fontSize);
         page.drawText(safe, { x, y, size: fontSize, font, color: rgb(r, g, b) });
+      }
+      return { doc };
+    },
+  },
+
+  {
+    id: 'marks.border', label: 'Page border', group: 'marks', icon: 'info',
+    description: 'Draw a rectangular border inset from the page edge on the given pages (all pages if omitted).',
+    agentCallable: true,
+    params: {
+      margin: { type: 'number', default: 24, min: 0, max: 200 },
+      thickness: { type: 'number', default: 1.5, min: 0.25, max: 20 },
+      color: { type: 'string', default: '#333333' },
+      pages: { type: 'array', items: { type: 'int', min: 0 } },
+    },
+    async run(doc, { margin, thickness, color, pages }) {
+      const { rgb } = lib();
+      const [r, g, b] = hexToRgb(color, [0.2, 0.2, 0.2]);
+      const ps = doc.pdf.getPages();
+      for (const i of resolvePages(doc, pages)) {
+        const page = ps[i];
+        const { width, height } = page.getSize();
+        const w = Math.max(1, width - 2 * margin), h = Math.max(1, height - 2 * margin);
+        page.drawRectangle({ x: margin, y: margin, width: w, height: h, borderColor: rgb(r, g, b), borderWidth: thickness });
       }
       return { doc };
     },
@@ -2216,6 +2252,7 @@ const __m_ops_convert = (() => {
 
 const openForRender = __m_core_render.openForRender;
 const pageText = __m_core_render.pageText;
+const getEngine = __m_core_engines.getEngine;
 
 function dataUrlToBytes(dataUrl) {
   const bin = atob(dataUrl.slice(dataUrl.indexOf(',') + 1));
@@ -2261,6 +2298,25 @@ const ops = [
       for (let i = 0; i < pdf.numPages; i++) pages.push(await pageText(pdf, i));
       pdf.destroy?.();
       return { artifact: { text: pages.join('\n\n'), pageCount: pages.length, pages } };
+    },
+  },
+
+  {
+    id: 'convert.split', label: 'Split to files', group: 'convert', icon: 'extract',
+    description: 'Split the document into one single-page PDF per page. Returns an artifact list of { name, bytes } for the UI to bundle into a zip. Does not change the document.',
+    agentCallable: true, mutates: false,
+    params: {},
+    async run(doc) {
+      const { PDFDocument } = getEngine('pdf-lib');
+      const n = doc.pageCount();
+      const files = [];
+      for (let i = 0; i < n; i++) {
+        const out = await PDFDocument.create();
+        const [pg] = await out.copyPages(doc.pdf, [i]);
+        out.addPage(pg);
+        files.push({ name: `page-${String(i + 1).padStart(3, '0')}.pdf`, bytes: await out.save({ updateMetadata: false }) });
+      }
+      return { artifact: { files, count: n } };
     },
   },
 ];
@@ -4327,6 +4383,7 @@ function openConvertMenu() {
     item('Extract text', 'Download the text layer as .txt', extractText),
     item('Current page → image', 'Download this page as PNG or JPEG', currentPageImage),
     item('All pages → images (zip)', 'Render every page and download a .zip', allPagesZip),
+    item('Split to single-page PDFs (zip)', 'One PDF per page, downloaded as a .zip', splitFiles),
     item('Images → PDF', 'Append PNG/JPEG images as new pages', imagesToPdf),
     el('hr', { style: 'border:none;border-top:1px solid var(--panel-border);margin:4px 0' }),
     item('Compress (flatten to images)', 'Shrink scanned/image PDFs — lossy, text becomes non-selectable', compress),
@@ -4373,6 +4430,20 @@ async function allPagesZip() {
     downloadBytesAs(makeZip(files), `${baseName()}-pages.zip`, 'application/zip');
     toast(`Exported ${n} pages`, 'ok');
   } catch (e) { toast('Export failed', 'err', { detail: e.message }); }
+  finally { note.remove(); }
+}
+
+async function splitFiles() {
+  const n = state.doc.pageCount();
+  if (n < 2) return toast('Nothing to split — the document has one page', 'warn');
+  if (!await confirmModal(`Split into ${n} single-page PDFs and download a zip?`, { title: 'Split to files', okLabel: 'Split' })) return;
+  const note = busy('Splitting…');
+  try {
+    const res = await dispatch('convert.split', {}, { source: 'ui' });
+    const files = res.artifact.files.map(f => ({ name: `${baseName()}-${f.name}`, bytes: f.bytes }));
+    downloadBytesAs(makeZip(files), `${baseName()}-split.zip`, 'application/zip');
+    toast(`Split into ${n} files`, 'ok');
+  } catch (e) { toast('Split failed', 'err', { detail: e.message }); }
   finally { note.remove(); }
 }
 
@@ -4795,6 +4866,7 @@ function openMarksMenu() {
     item('Page numbers', 'Stamp {n} or {n} / {total}', addPageNumbers),
     item('Bates numbering', 'Sequential prefix + counter (legal)', addBates),
     item('Header / footer', 'Fixed text at a chosen corner', addHeaderFooter),
+    item('Page border', 'Rectangular frame inset from the edge', addBorder),
   ]); };
   return openModal({ title: 'Add marks', content, actions: [{ label: 'Close', value: true }] });
 }
@@ -4834,6 +4906,15 @@ async function addHeaderFooter() {
       options: ['top-center', 'top-left', 'top-right', 'bottom-center', 'bottom-left', 'bottom-right'].map(o => ({ value: o, label: o })) },
   ]);
   if (v?.text) dispatch('marks.text', v);
+}
+
+async function addBorder() {
+  const v = await formModal('Page border', [
+    { name: 'margin', label: 'Inset from edge (pt)', type: 'number', value: 24 },
+    { name: 'thickness', label: 'Line thickness (pt)', type: 'number', value: 1.5 },
+    { name: 'color', label: 'Colour (hex)', value: '#333333' },
+  ]);
+  if (v) dispatch('marks.border', v);
 }
 
 return { openMarksMenu };
@@ -5831,6 +5912,7 @@ function buildPageOps() {
     make('insert', 'insert', 'Insert blank page',   onInsert),
     make('scale',  'scale',  'Scale pages…',        onScale),
     make('merge',  'merge',  'Merge a PDF in…',     mergePdf),
+    make('reorder','reorder','Reverse page order',   () => dispatch('pages.reverse', {})),
     make('mark',   'mark',   'Add marks…',          openMarksMenu),
     make('forms',  'forms',  'Edit form fields…',   openFormsDialog),
     make('ocr',    'ocr',    'OCR text layer…',     openOcrMenu),

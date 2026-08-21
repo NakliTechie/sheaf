@@ -22,6 +22,7 @@ export function openConvertMenu() {
     item('Extract text', 'Download the text layer as .txt', extractText),
     item('Current page → image', 'Download this page as PNG or JPEG', currentPageImage),
     item('All pages → images (zip)', 'Render every page and download a .zip', allPagesZip),
+    item('Split to single-page PDFs (zip)', 'One PDF per page, downloaded as a .zip', splitFiles),
     item('Images → PDF', 'Append PNG/JPEG images as new pages', imagesToPdf),
     el('hr', { style: 'border:none;border-top:1px solid var(--panel-border);margin:4px 0' }),
     item('Compress (flatten to images)', 'Shrink scanned/image PDFs — lossy, text becomes non-selectable', compress),
@@ -68,6 +69,20 @@ async function allPagesZip() {
     downloadBytesAs(makeZip(files), `${baseName()}-pages.zip`, 'application/zip');
     toast(`Exported ${n} pages`, 'ok');
   } catch (e) { toast('Export failed', 'err', { detail: e.message }); }
+  finally { note.remove(); }
+}
+
+async function splitFiles() {
+  const n = state.doc.pageCount();
+  if (n < 2) return toast('Nothing to split — the document has one page', 'warn');
+  if (!await confirmModal(`Split into ${n} single-page PDFs and download a zip?`, { title: 'Split to files', okLabel: 'Split' })) return;
+  const note = busy('Splitting…');
+  try {
+    const res = await dispatch('convert.split', {}, { source: 'ui' });
+    const files = res.artifact.files.map(f => ({ name: `${baseName()}-${f.name}`, bytes: f.bytes }));
+    downloadBytesAs(makeZip(files), `${baseName()}-split.zip`, 'application/zip');
+    toast(`Split into ${n} files`, 'ok');
+  } catch (e) { toast('Split failed', 'err', { detail: e.message }); }
   finally { note.remove(); }
 }
 
