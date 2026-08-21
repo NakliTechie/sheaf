@@ -49,7 +49,11 @@ export async function dispatch(id, params = {}, { source = 'ui', record = true }
     }
     markDirty(true);
     emit('doc:changed', { id, source });
-    return { ok: true, doc: r.doc };
+    // An op may return a `warning` (e.g. redaction could not guarantee removal of some text
+    // under the box — the C1 honesty signal). Surface it loudly via the global toast bus so
+    // every call site sees it without bespoke wiring, and return it for callers that care.
+    if (r.warning) emit('toast', { message: r.warning, level: 'warn', duration: 7000 });
+    return { ok: true, doc: r.doc, warning: r.warning };
   }
 
   // Open op: a fresh document. Reset history + view + selection, seed the floor.
@@ -81,7 +85,7 @@ async function runAndNormalize(doc, op, params) {
   const out = res?.doc;
   if (!(out instanceof SheafDoc)) throw new Error(`Op "${op.id}" must return { doc } but did not`);
   const bytes = await out.toBytes();
-  return { doc: await SheafDoc.fromBytes(bytes, { validate: false }), bytes };
+  return { doc: await SheafDoc.fromBytes(bytes, { validate: false }), bytes, warning: res?.warning };
 }
 
 // Rebuild the document at a target pointer from the nearest snapshot + replayed ops.
