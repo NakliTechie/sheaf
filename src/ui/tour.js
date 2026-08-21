@@ -22,7 +22,7 @@ const STEPS = [
   {
     target: '#pageops',
     title: 'Work on the real document',
-    body: 'Reorder, rotate, delete, insert, merge, and split pages — with OCR, forms, and export under More. These change the PDF’s structure, not a picture of it.',
+    body: 'Page operations are grouped by task — Arrange, Transform, Insert — with Marks, Forms, OCR, and Export alongside. These change the PDF’s structure, not a picture of it.',
   },
   {
     target: '#tb-tools',

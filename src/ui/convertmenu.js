@@ -115,7 +115,7 @@ function compareWith() {
   input.click();
 }
 
-function imagesToPdf() {
+export function imagesToPdf() {
   const input = el('input', { type: 'file', accept: 'image/png,image/jpeg', multiple: 'true' });
   input.onchange = async () => {
     const imgs = [];
