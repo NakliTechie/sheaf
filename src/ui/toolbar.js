@@ -12,7 +12,7 @@ import { openModal, confirmModal, formModal } from './modal.js';
 import { toast } from './toast.js';
 import { openPdf, newBlank, savePdf, savePdfAs, mergePdf, openFolder } from './fileops.js';
 import { openSaveMenu } from './savemenu.js';
-import { openConvertMenu } from './convertmenu.js';
+import { openConvertMenu, imagesToPdf } from './convertmenu.js';
 import { openSettings } from './settings.js';
 import { openHelp } from './help.js';
 import { openMarksMenu } from './marksmenu.js';
@@ -47,6 +47,31 @@ function btn(iconName, label, onClick, { needsDoc = false, danger = false, id = 
   return b;
 }
 
+// A labelled dropdown button that opens a grouped menu of page ops (Arrange/Transform/
+// Insert). Replaces the old flat 17-icon page-op row — fewer, self-labelling, predictable.
+function dropdown(iconName, label, items) {
+  const b = btn(iconName, label, () => openDropdownMenu(label, items), { needsDoc: true, title: label });
+  b.classList.add('dropdown');
+  b.setAttribute('aria-haspopup', 'menu');
+  b.append(el('span.caret', { html: icon('chevdown') }));
+  return b;
+}
+
+function openDropdownMenu(title, items) {
+  const content = ({ close }) => el('div.menu-list', { role: 'menu' }, items.map((it) =>
+    el('button', {
+      class: `btn menu-item ${it.danger ? 'danger' : ''}`, role: 'menuitem',
+      onClick: async () => { close(); await runItem(it.run); },
+    }, [el('span', { html: icon(it.icon) }), el('span.label', { text: it.label })])
+  ));
+  return openModal({ title, content, actions: [{ label: 'Close', value: true }] });
+}
+
+async function runItem(fn) {
+  try { await fn(); }
+  catch (e) { toast('That action could not be applied', 'err', { detail: e.message }); }
+}
+
 // Annotation tool toggle button. tool === null → the select/cursor (clears the tool).
 function toolBtn(iconName, tool, label) {
   const b = el('button', {
@@ -71,13 +96,6 @@ export function initToolbar() {
   on('tool:changed', ({ tool }) => reflectTool(tool));
   on('theme:changed', ({ theme }) => { const tb = document.getElementById('btn-theme'); if (tb) tb.querySelector('span').innerHTML = icon(theme === 'light' ? 'moon' : 'sun'); });
   refresh();
-
-  // Responsive overflow: re-fold the page ops whenever the toolbar's width changes.
-  // Observing the toolbar (not a child) means fit()'s display toggles can't re-trigger
-  // it — its border-box stays pinned to the viewport width.
-  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(scheduleFit).observe(bar);
-  window.addEventListener('resize', scheduleFit);
-  scheduleFit();
 }
 
 function reflectTool(tool) {
@@ -99,20 +117,20 @@ function render(version) {
       hasFSA ? btn('openfolder', '', openFolder, { title: 'Open folder of PDFs' }) : null,
       btn('new', '', newBlank, { id: 'btn-new' }),
     ].filter(Boolean)),
-    el('div.sep'),
-    el('div.group', {}, [
+    el('div.sep.doc-only'),
+    el('div.group.doc-only', {}, [
       btn('save', 'Save', savePdf, { needsDoc: true }),
       btn('saveas', '', openSaveMenu, { needsDoc: true, title: 'Save options' }),
     ]),
-    el('div.sep'),
-    el('div.group', {}, [
+    el('div.sep.doc-only'),
+    el('div.group.doc-only', {}, [
       (undoBtn = btn('undo', '', () => undo(), { needsDoc: true })),
       (redoBtn = btn('redo', '', () => redo(), { needsDoc: true })),
     ]),
-    el('div.sep'),
+    el('div.sep.doc-only'),
     buildPageOps(),
-    el('div.sep'),
-    (toolsGroup = el('div.group', { id: 'tb-tools' }, [
+    el('div.sep.doc-only'),
+    (toolsGroup = el('div.group.doc-only', { id: 'tb-tools' }, [
       toolBtn('cursor', null, 'Select'),
       toolBtn('highlight', 'highlight', 'Highlight'),
       toolBtn('square', 'rect', 'Rectangle'),
@@ -129,10 +147,13 @@ function render(version) {
     ])),
 
     el('div.spacer'),
-    (fname = el('div.fname', { text: '' })),
+    (fname = el('div.fname.doc-only', { text: '' })),
+    el('div.sep.doc-only'),
+    el('div.group.doc-only', {}, [
+      btn('ai', '', openSidecarMenu, { needsDoc: true, id: 'tb-ai' }),
+    ]),
     el('div.sep'),
     el('div.group', {}, [
-      btn('ai', '', openSidecarMenu, { needsDoc: true, id: 'tb-ai' }),
       btn(document.documentElement.getAttribute('data-theme') === 'light' ? 'moon' : 'sun', '', toggleTheme, { id: 'btn-theme' }),
       btn('settings', '', openSettings),
       btn('help', '', openHelp, { id: 'tb-help' }),
@@ -140,83 +161,52 @@ function render(version) {
   );
 }
 
-let undoBtn, redoBtn, fname, toolsGroup, pageOpsGroup, moreBtn, pageOps = [];
+let undoBtn, redoBtn, fname, toolsGroup, opGroup;
 
-// Page ops in priority order (most-used first). rotate/trash/copy/insert/scale/merge are
-// direct one-click actions; the trailing five open dialogs. fit() folds them from the
-// tail into the "More" menu when the toolbar would overflow. The `title` on each inline
-// button is preserved verbatim — the guide capture selects these by title at 1600px,
-// where nothing folds — while the menu rows get fuller human labels.
+// Page ops as three task-grouped dropdowns (Arrange / Transform / Insert) + the dialog
+// openers (Marks / Forms / OCR / Export / Metadata). Grouping by task — not build order —
+// so a newcomer can predict where an op lives, and the toolbar stays compact enough that
+// the old overflow-fold ("More" menu) is no longer needed.
 function buildPageOps() {
-  const make = (iconName, title, menuLabel, run, danger = false) => {
-    const b = btn(iconName, '', run, { needsDoc: true, danger, title });
-    return { b, iconName, title, menuLabel, danger, run, folded: false };
-  };
-  pageOps = [
-    make('rotate', 'rotate', 'Rotate 90°',         () => runOp('pages.rotate', { pages: targetPages(), angle: 90 })),
-    make('trash',  'trash',  'Delete pages',        onDelete, true),
-    make('copy',   'copy',   'Duplicate pages',     () => runOp('pages.duplicate', { pages: targetPages() })),
-    make('insert', 'insert', 'Insert blank page',   onInsert),
-    make('scale',  'scale',  'Scale pages…',        onScale),
-    make('merge',  'merge',  'Merge a PDF in…',     mergePdf),
-    make('reorder','reorder','Reverse page order',   () => runOp('pages.reverse', {})),
-    make('rotate', 'orient', 'Set orientation…',      onOrient),
-    make('extract','keeprange','Keep page range…',    onKeepRange),
-    make('scale', 'margin',  'Add margins…',          onAddMargin),
-    make('scale', 'nup',     'N-up (2/4 per sheet)…', onNUp),
-    make('mark',   'mark',   'Add marks…',          openMarksMenu),
-    make('forms',  'forms',  'Edit form fields…',   openFormsDialog),
-    make('ocr',    'ocr',    'OCR text layer…',     openOcrMenu),
-    make('download', 'Convert / Export', 'Convert / Export…', openConvertMenu),
-    make('info',   'info',   'Document metadata…',  onMetadata),
+  const arrange = [
+    { icon: 'reorder', label: 'Reverse page order', run: () => runOp('pages.reverse', {}) },
+    { icon: 'trash', label: 'Delete pages', run: onDelete, danger: true },
+    { icon: 'copy', label: 'Duplicate pages', run: () => runOp('pages.duplicate', { pages: targetPages() }) },
+    { icon: 'extract', label: 'Keep only selected pages', run: () => runOp('pages.extract', { pages: targetPages() }) },
+    { icon: 'extract', label: 'Keep page range…', run: onKeepRange },
   ];
-  moreBtn = btn('more', '', openMoreMenu, { needsDoc: true, title: 'More actions' });
-  moreBtn.id = 'btn-more';
-  moreBtn.setAttribute('aria-haspopup', 'menu');
-  moreBtn.style.display = 'none';
-  pageOpsGroup = el('div.group', { id: 'pageops' }, [...pageOps.map((p) => p.b), moreBtn]);
-  return pageOpsGroup;
-}
-
-// Fold the lowest-priority page ops into the More menu until the toolbar fits — pure
-// width math on the live layout (no hard-coded breakpoints), so it's correct at any
-// width. overflow:hidden in CSS is the backstop; this keeps everything *reachable*.
-function fit() {
-  if (!bar || !pageOpsGroup) return;
-  for (const p of pageOps) { p.b.style.display = ''; p.folded = false; }
-  moreBtn.style.display = 'none';
-  let i = pageOps.length - 1;
-  while (i >= 0 && bar.scrollWidth > bar.clientWidth + 1) {
-    pageOps[i].b.style.display = 'none';
-    pageOps[i].folded = true;
-    moreBtn.style.display = '';
-    i -= 1;
-  }
-}
-
-let fitQueued = false;
-function scheduleFit() {
-  if (fitQueued) return;
-  fitQueued = true;
-  requestAnimationFrame(() => { fitQueued = false; fit(); });
-}
-
-// The folded page ops as a vertical list. Each row runs the same handler as its toolbar
-// button and mirrors its disabled (needs-a-document) state.
-function openMoreMenu() {
-  const folded = pageOps.filter((p) => p.folded);
-  if (!folded.length) return;
-  const content = ({ close }) => el('div.menu-list', { role: 'menu' }, folded.map((p) =>
-    el('button', {
-      class: `btn menu-item ${p.danger ? 'danger' : ''}`, role: 'menuitem', disabled: p.b.disabled,
-      onClick: async () => { close(); await p.run(); },
-    }, [el('span', { html: icon(p.iconName) }), el('span.label', { text: p.menuLabel })])
-  ));
-  return openModal({ title: 'More actions', content, actions: [{ label: 'Close', value: true }] });
+  const transform = [
+    { icon: 'rotate', label: 'Rotate 90°', run: () => runOp('pages.rotate', { pages: targetPages(), angle: 90 }) },
+    { icon: 'rotate', label: 'Set orientation…', run: onOrient },
+    { icon: 'scale', label: 'Scale pages…', run: onScale },
+    { icon: 'crop', label: 'Crop (draw the keep area)', run: () => setTool('crop') },
+    { icon: 'scale', label: 'Add margins…', run: onAddMargin },
+    { icon: 'scale', label: 'N-up (2/4 per sheet)…', run: onNUp },
+  ];
+  const insert = [
+    { icon: 'insert', label: 'Blank page', run: onInsert },
+    { icon: 'imgpdf', label: 'Images → PDF…', run: imagesToPdf },
+    { icon: 'merge', label: 'Merge a PDF in…', run: mergePdf },
+  ];
+  opGroup = el('div.group.doc-only', { id: 'pageops' }, [
+    dropdown('reorder', 'Arrange', arrange),
+    dropdown('scale', 'Transform', transform),
+    dropdown('insert', 'Insert', insert),
+    el('div.sep'),
+    btn('mark', '', openMarksMenu, { needsDoc: true, title: 'Add marks…' }),
+    btn('forms', '', openFormsDialog, { needsDoc: true, title: 'Edit form fields…' }),
+    btn('ocr', '', openOcrMenu, { needsDoc: true, title: 'OCR text layer…' }),
+    btn('download', 'Export', openConvertMenu, { needsDoc: true, title: 'Convert / Export…' }),
+    btn('info', '', onMetadata, { needsDoc: true, title: 'Document metadata…' }),
+  ]);
+  return opGroup;
 }
 
 function refresh() {
   const open = !!state.doc;
+  // Minimal chrome on the empty state: the .doc-only groups (save/undo/page ops/tools/AI)
+  // are hidden until a document is open, so a newcomer isn't met by a wall of greyed icons.
+  if (bar) bar.classList.toggle('has-doc', open);
   for (const b of need) b.disabled = !open;
   if (undoBtn && redoBtn) { const h = historyStatus(); undoBtn.disabled = !h.canUndo; redoBtn.disabled = !h.canRedo; }
   if (fname) {

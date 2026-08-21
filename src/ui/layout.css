@@ -41,6 +41,14 @@
 .btn svg { width: 18px; height: 18px; display: block; }
 .btn .label { font-size: 13px; }
 .btn.tool.active { background: var(--accent); color: var(--accent-fg); }
+
+/* Minimal chrome: hide document-only groups until a PDF is open (UX-M1). */
+#toolbar:not(.has-doc) .doc-only { display: none; }
+
+/* Grouped page-op dropdowns (UX-H1) — labelled button + a small caret. */
+.btn.dropdown { gap: 5px; }
+.btn.dropdown .caret { display: inline-flex; opacity: .6; }
+.btn.dropdown .caret svg { width: 13px; height: 13px; }
 .color-swatch { width: 32px; height: 32px; padding: 0; border: 1px solid var(--panel-border); border-radius: var(--r-sm); background: none; cursor: pointer; }
 
 /* Touch devices: comfortable ≥44px tap targets (UX-L1). Desktop mouse keeps the compact
