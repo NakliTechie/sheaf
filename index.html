@@ -526,12 +526,22 @@ class History {
     this._ops.push({ op, params });
 
     if (this._ops.length > MAX_STEPS) {
-      const removed = this._ops.length - MAX_STEPS;
-      this._ops = this._ops.slice(removed);
-      this._snaps = this._snaps
-        .filter(s => s.pointer >= removed)
-        .map(s => ({ ...s, pointer: s.pointer - removed }));
-      this._pointer = Math.max(-1, this._pointer - removed);
+      // Trim the front, but ONLY down to an existing snapshot: that snapshot's bytes
+      // become the new origin (relabelled pointer -1) and the ops after it replay on top.
+      // Dropping the floor without a replacement breaks replayFromFloor + undo (H1) — so
+      // if no interior snapshot exists yet, keep the full log rather than orphan the floor.
+      const want = this._ops.length - MAX_STEPS;
+      const floorSnap = this._snaps
+        .filter(s => s.pointer >= 0 && s.pointer >= want - 1)
+        .sort((a, b) => a.pointer - b.pointer)[0];
+      if (floorSnap) {
+        const cut = floorSnap.pointer + 1;
+        this._ops = this._ops.slice(cut);
+        this._snaps = this._snaps
+          .filter(s => s.pointer >= floorSnap.pointer)
+          .map(s => ({ ...s, pointer: s.pointer - cut }));   // floorSnap → pointer -1
+        this._pointer = Math.max(-1, this._pointer - cut);
+      }
     }
     this._pointer = this._ops.length - 1;
     return this._pointer;
@@ -3985,10 +3995,21 @@ function exitFolderMode() {
   emit('folder:changed', null);
 }
 
+// Guard user-initiated document replacement behind an unsaved-changes prompt. Returns
+// true to proceed. Used by every path a person can swap the open doc from — Open, New,
+// drag-drop, recent-reopen — mirroring the guard folder-stepping (openFileAt) already has.
+// Programmatic opens (agent face, URL mode, crash-recovery) call openBytes directly and
+// are intentionally NOT gated — they must not block on a modal.
+async function confirmDiscardIfDirty() {
+  if (!state.dirty) return true;
+  return await confirmModal(`Discard unsaved changes to ${state.session.fileName || 'this document'}?`, { title: 'Unsaved changes', okLabel: 'Discard', danger: true });
+}
+
 async function openPdf() {
   try {
     const picked = storage.hasFSA ? await storage.pickAndReadPdf() : await storage.readPdfViaInput();
     if (!picked) return;
+    if (!await confirmDiscardIfDirty()) return;
     await ensurePdfLib();
     await dispatch('open.bytes', { bytes: picked.bytes });
     state.session.fileName = picked.name;
@@ -4013,6 +4034,7 @@ async function openBytes(bytes, name = 'document.pdf', handle = null) {
 }
 
 async function newBlank() {
+  if (!await confirmDiscardIfDirty()) return;
   await ensurePdfLib();
   await dispatch('open.blank', { pages: 1 });
   state.session.fileName = 'untitled.pdf';
@@ -4130,7 +4152,7 @@ async function mergePdf() {
   }
 }
 
-return { openPdf, openBytes, newBlank, savePdf, savePdfAs, saveCopy, openFolder, openFileAt, nextFile, prevFile, mergePdf };
+return { confirmDiscardIfDirty, openPdf, openBytes, newBlank, savePdf, savePdfAs, saveCopy, openFolder, openFileAt, nextFile, prevFile, mergePdf };
 })();
 
 /* ui/savemenu.js */
@@ -5924,6 +5946,7 @@ const openPdf = __m_ui_fileops.openPdf;
 const newBlank = __m_ui_fileops.newBlank;
 const openBytes = __m_ui_fileops.openBytes;
 const openFolder = __m_ui_fileops.openFolder;
+const confirmDiscardIfDirty = __m_ui_fileops.confirmDiscardIfDirty;
 const hasFSA = __m_core_storage.hasFSA;
 const ensurePdfLib = __m_ui_engines_ui.ensurePdfLib;
 const toast = __m_ui_toast.toast;
@@ -5982,6 +6005,7 @@ async function renderRecent() {
 
 async function reopen(rec) {
   try {
+    if (!await confirmDiscardIfDirty()) return;
     if (!await storage.ensurePermission(rec.handle, 'read')) return toast('Permission denied', 'warn');
     await ensurePdfLib();
     const file = await rec.handle.getFile();
@@ -6002,6 +6026,7 @@ function wireGlobalDrop() {
     e.preventDefault(); dropEl()?.classList.remove('over');
     const file = [...(e.dataTransfer?.files || [])].find(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
     if (!file) return;
+    if (!await confirmDiscardIfDirty()) return;
     try {
       await ensurePdfLib();
       const bytes = new Uint8Array(await file.arrayBuffer());

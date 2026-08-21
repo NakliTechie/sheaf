@@ -17,10 +17,21 @@ function exitFolderMode() {
   emit('folder:changed', null);
 }
 
+// Guard user-initiated document replacement behind an unsaved-changes prompt. Returns
+// true to proceed. Used by every path a person can swap the open doc from — Open, New,
+// drag-drop, recent-reopen — mirroring the guard folder-stepping (openFileAt) already has.
+// Programmatic opens (agent face, URL mode, crash-recovery) call openBytes directly and
+// are intentionally NOT gated — they must not block on a modal.
+export async function confirmDiscardIfDirty() {
+  if (!state.dirty) return true;
+  return await confirmModal(`Discard unsaved changes to ${state.session.fileName || 'this document'}?`, { title: 'Unsaved changes', okLabel: 'Discard', danger: true });
+}
+
 export async function openPdf() {
   try {
     const picked = storage.hasFSA ? await storage.pickAndReadPdf() : await storage.readPdfViaInput();
     if (!picked) return;
+    if (!await confirmDiscardIfDirty()) return;
     await ensurePdfLib();
     await dispatch('open.bytes', { bytes: picked.bytes });
     state.session.fileName = picked.name;
@@ -45,6 +56,7 @@ export async function openBytes(bytes, name = 'document.pdf', handle = null) {
 }
 
 export async function newBlank() {
+  if (!await confirmDiscardIfDirty()) return;
   await ensurePdfLib();
   await dispatch('open.blank', { pages: 1 });
   state.session.fileName = 'untitled.pdf';

@@ -7,7 +7,7 @@ import { icon } from './icons.js';
 import { on, emit } from '../core/events.js';
 import { state } from '../core/state.js';
 import * as storage from '../core/storage.js';
-import { openPdf, newBlank, openBytes, openFolder } from './fileops.js';
+import { openPdf, newBlank, openBytes, openFolder, confirmDiscardIfDirty } from './fileops.js';
 import { hasFSA } from '../core/storage.js';
 import { ensurePdfLib } from './engines-ui.js';
 import { toast } from './toast.js';
@@ -66,6 +66,7 @@ async function renderRecent() {
 
 async function reopen(rec) {
   try {
+    if (!await confirmDiscardIfDirty()) return;
     if (!await storage.ensurePermission(rec.handle, 'read')) return toast('Permission denied', 'warn');
     await ensurePdfLib();
     const file = await rec.handle.getFile();
@@ -86,6 +87,7 @@ function wireGlobalDrop() {
     e.preventDefault(); dropEl()?.classList.remove('over');
     const file = [...(e.dataTransfer?.files || [])].find(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
     if (!file) return;
+    if (!await confirmDiscardIfDirty()) return;
     try {
       await ensurePdfLib();
       const bytes = new Uint8Array(await file.arrayBuffer());
