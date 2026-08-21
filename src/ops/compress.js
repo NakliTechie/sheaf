@@ -7,12 +7,8 @@
 import { getEngine } from '../core/engines.js';
 import { openForRender } from '../core/render.js';
 import { SheafDoc } from '../core/doc.js';
-
-function carry(src, out) {
-  const m = (g, s) => { try { const v = src[g](); if (v != null) out[s](v); } catch {} };
-  m('getTitle', 'setTitle'); m('getAuthor', 'setAuthor'); m('getSubject', 'setSubject');
-  m('getCreationDate', 'setCreationDate'); m('getModificationDate', 'setModificationDate');
-}
+// one canonical metadata-carry (keywords/creator/producer included)
+import { carryMetadata } from './pages.js';
 
 function dataUrlToBytes(dataUrl) {
   const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
@@ -36,7 +32,7 @@ export const ops = [
       const srcPages = doc.pdf.getPages().map(p => p.getSize());
       const pdf = await openForRender(await doc.toBytes());
       const out = await PDFDocument.create();
-      carry(doc.pdf, out);
+      carryMetadata(doc.pdf, out);
       try {
         for (let i = 0; i < pdf.numPages; i++) {
           const page = await pdf.getPage(i + 1);

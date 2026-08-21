@@ -40,6 +40,7 @@ function coerceField(desc, value, path, errors) {
       if (typeof n !== 'number' || !Number.isFinite(n) || Math.trunc(n) !== n) { fail(errors, path, `expected integer, got ${JSON.stringify(value)}`); return undefined; }
       if (desc.min !== undefined && n < desc.min) { fail(errors, path, `must be >= ${desc.min}`); return undefined; }
       if (desc.max !== undefined && n > desc.max) { fail(errors, path, `must be <= ${desc.max}`); return undefined; }
+      if (desc.enum && !desc.enum.includes(n)) { fail(errors, path, `must be one of ${desc.enum.join(', ')}`); return undefined; }
       return n;
     }
     case 'number': {
@@ -47,6 +48,7 @@ function coerceField(desc, value, path, errors) {
       if (typeof n !== 'number' || !Number.isFinite(n)) { fail(errors, path, `expected number, got ${JSON.stringify(value)}`); return undefined; }
       if (desc.min !== undefined && n < desc.min) { fail(errors, path, `must be >= ${desc.min}`); return undefined; }
       if (desc.max !== undefined && n > desc.max) { fail(errors, path, `must be <= ${desc.max}`); return undefined; }
+      if (desc.enum && !desc.enum.includes(n)) { fail(errors, path, `must be one of ${desc.enum.join(', ')}`); return undefined; }
       return n;
     }
     case 'string': {
@@ -64,6 +66,7 @@ function coerceField(desc, value, path, errors) {
     case 'array': {
       if (!Array.isArray(value)) { fail(errors, path, 'expected array'); return undefined; }
       if (desc.minItems !== undefined && value.length < desc.minItems) { fail(errors, path, `needs >= ${desc.minItems} items`); return undefined; }
+      if (desc.maxItems !== undefined && value.length > desc.maxItems) { fail(errors, path, `too many items (max ${desc.maxItems})`); return undefined; }
       if (!desc.items) return value;
       return value.map((v, i) => coerceField(desc.items, v, `${path}[${i}]`, errors));
     }

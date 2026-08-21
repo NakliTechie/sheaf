@@ -86,7 +86,24 @@ async function onDown(e) {
   wrap.style.position = 'relative';
   wrap.appendChild(preview);
   window.addEventListener('pointermove', onMove);
-  window.addEventListener('pointerup', onUp, { once: true });
+  window.addEventListener('pointerup', onUp);
+  window.addEventListener('pointercancel', onCancel);
+}
+
+// Remove all three gesture listeners together, whichever way the gesture ends. (Using
+// pointerup {once} alone leaked pointermove when the stream was cancelled — L6.)
+function endGesture() {
+  window.removeEventListener('pointermove', onMove);
+  window.removeEventListener('pointerup', onUp);
+  window.removeEventListener('pointercancel', onCancel);
+}
+
+// Pointer stream cancelled (touch interrupted, released off-window) — tear down without
+// applying anything, so no stray preview lingers and no op fires.
+function onCancel() {
+  endGesture();
+  if (preview) { preview.remove(); preview = null; }
+  gesture = null;
 }
 
 function onMove(e) {
@@ -118,7 +135,7 @@ function drawPreview() {
 }
 
 function onUp() {
-  window.removeEventListener('pointermove', onMove);
+  endGesture();
   if (!gesture) return;
   const g = gesture; gesture = null;
   if (preview) { preview.remove(); preview = null; }

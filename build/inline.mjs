@@ -14,6 +14,7 @@ import { readFileSync, writeFileSync, readdirSync, statSync } from 'fs';
 import { resolve, dirname, relative, join } from 'path';
 import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
+import vm from 'vm';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -121,15 +122,34 @@ let inlineJs = order.map(p => transformModule(p, readFileSync(p, 'utf8'))).join(
 // Single-file artifact: engines sit next to index.html at the deploy root.
 inlineJs = inlineJs.replace("new URL('../engines', import.meta.url).pathname", "'./engines'");
 
+// Guard: the concatenated bundle must be valid standalone JS with NO leftover static
+// import/export. A mid-bundle import (e.g. an import line with a trailing comment that
+// the stripper's `$`-anchored regex misses) parses fine per-file — so `npm test`, which
+// imports modules directly, and the reproduce check, which only compares bytes, both stay
+// green — yet the built <script type="module"> fails to parse and the whole app is dead.
+// Parse as a Script (not a Module): any surviving top-level import/export throws here.
+try {
+  new vm.Script(inlineJs, { filename: 'sheaf-bundle.js' });
+} catch (err) {
+  throw new Error(`Inlined bundle is not valid standalone JS (leftover import/export or syntax error): ${err.message}`);
+}
+
 const css = collectCss(SRC);
 const template = readFileSync(join(SRC, 'index.html'), 'utf8');
 const jsHash = createHash('sha256').update(inlineJs).digest('hex').slice(0, 12);
 
+// Stamp VERSION into the two version placeholders. Match the actual attributes (not a
+// hardcoded version literal) and assert both exist — a silently-unmatched replace would
+// ship a stale/unstamped version with no error (forward-pass S2).
+const versionTargets = [/<meta name="sheaf-version" content="[^"]*">/, /data-version="[^"]*"/];
+for (const re of versionTargets) {
+  if (!re.test(template)) throw new Error(`Build: version placeholder ${re} not found in src/index.html`);
+}
 let html = template
   .replace(/<link rel="stylesheet" href="[^"]*">\s*/g, '')
   .replace(/<script type="module" src="[^"]*"><\/script>/, '')
-  .replace(/content="0\.1\.0"/, `content="${VERSION}"`)
-  .replace(/data-version="0\.1\.0"/, `data-version="${VERSION}"`)
+  .replace(/(<meta name="sheaf-version" content=")[^"]*(">)/, `$1${VERSION}$2`)
+  .replace(/(data-version=")[^"]*(")/, `$1${VERSION}$2`)
   .replace('</head>', `<style>\n${css}\n</style>\n</head>`)
   .replace('</body>', `<script type="module">\n${inlineJs}\n</script>\n</body>`);
 

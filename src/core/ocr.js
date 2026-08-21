@@ -12,38 +12,54 @@ const VER = '7.0.0';
 // are loaded by Tesseract from the same-origin vendored paths (version-pinned).
 const ESM_SHA = '64871d76c75609fd5413b88a8171e2ef40deedd77d5875ba23df104b2d05eb29';
 
-let _mod = null;       // tesseract.esm module
-let _worker = null;    // a live Tesseract worker (reused across pages)
+let _mod = null;         // tesseract.esm module
+let _modLoading = null;  // in-flight module load (dedupe concurrent callers)
+let _worker = null;      // a live Tesseract worker (reused across pages)
+let _workerLoading = null; // in-flight worker spawn
 
 function dir() { return `${enginesBase()}/tesseract/${VER}`; }
 
 async function loadModule() {
   if (_mod) return _mod;
-  const url = `${dir()}/tesseract.esm.min.js`;
-  const res = await fetch(url, { cache: 'force-cache' });
-  if (!res.ok) throw new Error(`OCR engine fetch failed: HTTP ${res.status}`);
-  const buf = await res.arrayBuffer();
-  const got = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))].map(b => b.toString(16).padStart(2, '0')).join('');
-  if (got !== ESM_SHA) throw new Error('OCR engine integrity check FAILED — refusing to load a tampered bundle.');
-  const imported = await import(/* @vite-ignore */ url);
-  _mod = imported.default || imported; // tesseract.js ESM exports its API under default
-  return _mod;
+  // Dedupe concurrent loads — two OCR calls before the first resolves must share one
+  // fetch+import, not each pull the multi-MB module.
+  if (_modLoading) return _modLoading;
+  _modLoading = (async () => {
+    const url = `${dir()}/tesseract.esm.min.js`;
+    const res = await fetch(url, { cache: 'force-cache' });
+    if (!res.ok) throw new Error(`OCR engine fetch failed: HTTP ${res.status}`);
+    const buf = await res.arrayBuffer();
+    const got = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))].map(b => b.toString(16).padStart(2, '0')).join('');
+    if (got !== ESM_SHA) throw new Error('OCR engine integrity check FAILED — refusing to load a tampered bundle.');
+    const imported = await import(/* @vite-ignore */ url);
+    _mod = imported.default || imported; // tesseract.js ESM exports its API under default
+    return _mod;
+  })();
+  try { return await _modLoading; }
+  finally { _modLoading = null; }
 }
 
 // Spin up (and cache) a worker. onProgress receives Tesseract status messages
 // ({status, progress}) so the UI can show a real bar.
 export async function getOcrWorker(onProgress) {
   if (_worker) return _worker;
-  const { createWorker } = await loadModule();
-  const base = dir();
-  _worker = await createWorker('eng', 1, {
-    workerPath: `${base}/worker.min.js`,
-    corePath: `${base}/tesseract-core-simd-lstm.wasm.js`, // exact file → no feature-detect, deterministic across browsers
-    langPath: `${base}/`,                 // dir; contains eng.traineddata.gz
-    workerBlobURL: false,                 // load worker from the path (CSP worker-src 'self')
-    logger: (m) => { if (m?.status) { emit('ocr:progress', m); onProgress?.(m); } },
-  });
-  return _worker;
+  // Dedupe concurrent spawns — otherwise the second call overwrites _worker and orphans
+  // the first live worker (resource leak).
+  if (_workerLoading) return _workerLoading;
+  _workerLoading = (async () => {
+    const { createWorker } = await loadModule();
+    const base = dir();
+    _worker = await createWorker('eng', 1, {
+      workerPath: `${base}/worker.min.js`,
+      corePath: `${base}/tesseract-core-simd-lstm.wasm.js`, // exact file → no feature-detect, deterministic across browsers
+      langPath: `${base}/`,                 // dir; contains eng.traineddata.gz
+      workerBlobURL: false,                 // load worker from the path (CSP worker-src 'self')
+      logger: (m) => { if (m?.status) { emit('ocr:progress', m); onProgress?.(m); } },
+    });
+    return _worker;
+  })();
+  try { return await _workerLoading; }
+  finally { _workerLoading = null; }
 }
 
 // Recognize a canvas (or ImageData/HTMLImage). Returns Tesseract's data plus a flat

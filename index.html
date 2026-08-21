@@ -526,12 +526,22 @@ class History {
     this._ops.push({ op, params });
 
     if (this._ops.length > MAX_STEPS) {
-      const removed = this._ops.length - MAX_STEPS;
-      this._ops = this._ops.slice(removed);
-      this._snaps = this._snaps
-        .filter(s => s.pointer >= removed)
-        .map(s => ({ ...s, pointer: s.pointer - removed }));
-      this._pointer = Math.max(-1, this._pointer - removed);
+      // Trim the front, but ONLY down to an existing snapshot: that snapshot's bytes
+      // become the new origin (relabelled pointer -1) and the ops after it replay on top.
+      // Dropping the floor without a replacement breaks replayFromFloor + undo (H1) — so
+      // if no interior snapshot exists yet, keep the full log rather than orphan the floor.
+      const want = this._ops.length - MAX_STEPS;
+      const floorSnap = this._snaps
+        .filter(s => s.pointer >= 0 && s.pointer >= want - 1)
+        .sort((a, b) => a.pointer - b.pointer)[0];
+      if (floorSnap) {
+        const cut = floorSnap.pointer + 1;
+        this._ops = this._ops.slice(cut);
+        this._snaps = this._snaps
+          .filter(s => s.pointer >= floorSnap.pointer)
+          .map(s => ({ ...s, pointer: s.pointer - cut }));   // floorSnap → pointer -1
+        this._pointer = Math.max(-1, this._pointer - cut);
+      }
     }
     this._pointer = this._ops.length - 1;
     return this._pointer;
@@ -843,6 +853,7 @@ function coerceField(desc, value, path, errors) {
       if (typeof n !== 'number' || !Number.isFinite(n) || Math.trunc(n) !== n) { fail(errors, path, `expected integer, got ${JSON.stringify(value)}`); return undefined; }
       if (desc.min !== undefined && n < desc.min) { fail(errors, path, `must be >= ${desc.min}`); return undefined; }
       if (desc.max !== undefined && n > desc.max) { fail(errors, path, `must be <= ${desc.max}`); return undefined; }
+      if (desc.enum && !desc.enum.includes(n)) { fail(errors, path, `must be one of ${desc.enum.join(', ')}`); return undefined; }
       return n;
     }
     case 'number': {
@@ -850,6 +861,7 @@ function coerceField(desc, value, path, errors) {
       if (typeof n !== 'number' || !Number.isFinite(n)) { fail(errors, path, `expected number, got ${JSON.stringify(value)}`); return undefined; }
       if (desc.min !== undefined && n < desc.min) { fail(errors, path, `must be >= ${desc.min}`); return undefined; }
       if (desc.max !== undefined && n > desc.max) { fail(errors, path, `must be <= ${desc.max}`); return undefined; }
+      if (desc.enum && !desc.enum.includes(n)) { fail(errors, path, `must be one of ${desc.enum.join(', ')}`); return undefined; }
       return n;
     }
     case 'string': {
@@ -867,6 +879,7 @@ function coerceField(desc, value, path, errors) {
     case 'array': {
       if (!Array.isArray(value)) { fail(errors, path, 'expected array'); return undefined; }
       if (desc.minItems !== undefined && value.length < desc.minItems) { fail(errors, path, `needs >= ${desc.minItems} items`); return undefined; }
+      if (desc.maxItems !== undefined && value.length > desc.maxItems) { fail(errors, path, `too many items (max ${desc.maxItems})`); return undefined; }
       if (!desc.items) return value;
       return value.map((v, i) => coerceField(desc.items, v, `${path}[${i}]`, errors));
     }
@@ -1115,14 +1128,15 @@ const ops = [
     agentCallable: true,
     params: {
       pages: { type: 'array', required: true, items: { type: 'int', min: 0 }, minItems: 1 },
-      angle: { type: 'int', required: true, enum: undefined },
+      angle: { type: 'int', required: true },
     },
     run(doc, { pages, angle }) {
       if (angle % 90 !== 0) throw new Error('Rotation angle must be a multiple of 90');
       assertPages(pages, doc.pageCount());
       const { degrees } = lib();
       const ps = doc.pdf.getPages();
-      for (const i of pages) {
+      // Dedupe: rotate is a per-page delta, so a repeated index would compound (0,0 → 180°).
+      for (const i of new Set(pages)) {
         const cur = ps[i].getRotation().angle;
         ps[i].setRotation(degrees(norm360(cur + angle)));
       }
@@ -1241,7 +1255,8 @@ const ops = [
     run(doc, { pages, factor }) {
       assertPages(pages, doc.pageCount());
       const ps = doc.pdf.getPages();
-      for (const i of pages) ps[i].scale(factor, factor);
+      // Dedupe: scale multiplies, so a repeated index would compound (2,2 → 4×).
+      for (const i of new Set(pages)) ps[i].scale(factor, factor);
       return { doc };
     },
   },
@@ -1267,7 +1282,7 @@ const ops = [
   },
 ];
 
-return { ops };
+return { carryMetadata, ops };
 })();
 
 /* ops/metadata.js */
@@ -2036,9 +2051,9 @@ return { tokenize, redactTokens, ops };
 const __m_ops_sign = (() => {
 // ops/sign.js — appearance signing. Places a typed signature (and optional date line)
 // onto the page. The date is a PARAMETER, not the clock, so the op stays deterministic
-// and replayable — the UI passes today's date. Drawn/image signatures and a saved
-// signature library ride the storage façade and land as a v1.x enrichment; the
-// deterministic appearance-sign is the v1.0 floor.
+// and replayable — the UI passes today's date. Drawn/image signatures and the saved
+// signature library (storage façade, ui/signature.js) shipped in M4; the deterministic
+// appearance-sign is the v1.0 floor.
 //
 // Cryptographic (PAdES) signing is a separate, later tier (handoff v1.2, WebCrypto) —
 // this is the visible-appearance signature, explicitly not a cryptographic guarantee.
@@ -2269,38 +2284,54 @@ const VER = '7.0.0';
 // are loaded by Tesseract from the same-origin vendored paths (version-pinned).
 const ESM_SHA = '64871d76c75609fd5413b88a8171e2ef40deedd77d5875ba23df104b2d05eb29';
 
-let _mod = null;       // tesseract.esm module
-let _worker = null;    // a live Tesseract worker (reused across pages)
+let _mod = null;         // tesseract.esm module
+let _modLoading = null;  // in-flight module load (dedupe concurrent callers)
+let _worker = null;      // a live Tesseract worker (reused across pages)
+let _workerLoading = null; // in-flight worker spawn
 
 function dir() { return `${enginesBase()}/tesseract/${VER}`; }
 
 async function loadModule() {
   if (_mod) return _mod;
-  const url = `${dir()}/tesseract.esm.min.js`;
-  const res = await fetch(url, { cache: 'force-cache' });
-  if (!res.ok) throw new Error(`OCR engine fetch failed: HTTP ${res.status}`);
-  const buf = await res.arrayBuffer();
-  const got = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))].map(b => b.toString(16).padStart(2, '0')).join('');
-  if (got !== ESM_SHA) throw new Error('OCR engine integrity check FAILED — refusing to load a tampered bundle.');
-  const imported = await import(/* @vite-ignore */ url);
-  _mod = imported.default || imported; // tesseract.js ESM exports its API under default
-  return _mod;
+  // Dedupe concurrent loads — two OCR calls before the first resolves must share one
+  // fetch+import, not each pull the multi-MB module.
+  if (_modLoading) return _modLoading;
+  _modLoading = (async () => {
+    const url = `${dir()}/tesseract.esm.min.js`;
+    const res = await fetch(url, { cache: 'force-cache' });
+    if (!res.ok) throw new Error(`OCR engine fetch failed: HTTP ${res.status}`);
+    const buf = await res.arrayBuffer();
+    const got = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))].map(b => b.toString(16).padStart(2, '0')).join('');
+    if (got !== ESM_SHA) throw new Error('OCR engine integrity check FAILED — refusing to load a tampered bundle.');
+    const imported = await import(/* @vite-ignore */ url);
+    _mod = imported.default || imported; // tesseract.js ESM exports its API under default
+    return _mod;
+  })();
+  try { return await _modLoading; }
+  finally { _modLoading = null; }
 }
 
 // Spin up (and cache) a worker. onProgress receives Tesseract status messages
 // ({status, progress}) so the UI can show a real bar.
 async function getOcrWorker(onProgress) {
   if (_worker) return _worker;
-  const { createWorker } = await loadModule();
-  const base = dir();
-  _worker = await createWorker('eng', 1, {
-    workerPath: `${base}/worker.min.js`,
-    corePath: `${base}/tesseract-core-simd-lstm.wasm.js`, // exact file → no feature-detect, deterministic across browsers
-    langPath: `${base}/`,                 // dir; contains eng.traineddata.gz
-    workerBlobURL: false,                 // load worker from the path (CSP worker-src 'self')
-    logger: (m) => { if (m?.status) { emit('ocr:progress', m); onProgress?.(m); } },
-  });
-  return _worker;
+  // Dedupe concurrent spawns — otherwise the second call overwrites _worker and orphans
+  // the first live worker (resource leak).
+  if (_workerLoading) return _workerLoading;
+  _workerLoading = (async () => {
+    const { createWorker } = await loadModule();
+    const base = dir();
+    _worker = await createWorker('eng', 1, {
+      workerPath: `${base}/worker.min.js`,
+      corePath: `${base}/tesseract-core-simd-lstm.wasm.js`, // exact file → no feature-detect, deterministic across browsers
+      langPath: `${base}/`,                 // dir; contains eng.traineddata.gz
+      workerBlobURL: false,                 // load worker from the path (CSP worker-src 'self')
+      logger: (m) => { if (m?.status) { emit('ocr:progress', m); onProgress?.(m); } },
+    });
+    return _worker;
+  })();
+  try { return await _workerLoading; }
+  finally { _workerLoading = null; }
 }
 
 // Recognize a canvas (or ImageData/HTMLImage). Returns Tesseract's data plus a flat
@@ -2467,12 +2498,8 @@ const __m_ops_compress = (() => {
 const getEngine = __m_core_engines.getEngine;
 const openForRender = __m_core_render.openForRender;
 const SheafDoc = __m_core_doc.SheafDoc;
-
-function carry(src, out) {
-  const m = (g, s) => { try { const v = src[g](); if (v != null) out[s](v); } catch {} };
-  m('getTitle', 'setTitle'); m('getAuthor', 'setAuthor'); m('getSubject', 'setSubject');
-  m('getCreationDate', 'setCreationDate'); m('getModificationDate', 'setModificationDate');
-}
+// one canonical metadata-carry (keywords/creator/producer included)
+const carryMetadata = __m_ops_pages.carryMetadata;
 
 function dataUrlToBytes(dataUrl) {
   const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
@@ -2496,7 +2523,7 @@ const ops = [
       const srcPages = doc.pdf.getPages().map(p => p.getSize());
       const pdf = await openForRender(await doc.toBytes());
       const out = await PDFDocument.create();
-      carry(doc.pdf, out);
+      carryMetadata(doc.pdf, out);
       try {
         for (let i = 0; i < pdf.numPages; i++) {
           const page = await pdf.getPage(i + 1);
@@ -2588,9 +2615,8 @@ function comboOf(ev) {
   if (ev.shiftKey) parts.push('shift');
   if (ev.altKey) parts.push('alt');
   let k = ev.key;
-  if (k === ' ') k = 'space';
-  else if (k.length === 1) k = k.toLowerCase();
-  else k = k.toLowerCase(); // 'ArrowDown' -> 'arrowdown', 'Escape' -> 'escape'
+  // Normalize: space is named, everything else lowercased ('ArrowDown' -> 'arrowdown').
+  k = k === ' ' ? 'space' : k.toLowerCase();
   parts.push(k);
   return parts.join('+');
 }
@@ -2787,6 +2813,7 @@ async function replayFromFloor() {
   let doc = await SheafDoc.fromBytes(floor.bytes, { validate: false });
   for (const { op, params } of state.history.opsUpToPointer()) {
     const def = getOp(op);
+    if (!def) throw new Error(`Replay hit unknown op "${op}"`);
     doc = (await runAndNormalize(doc, def, params)).doc;
   }
   return doc;
@@ -3374,6 +3401,9 @@ function el(spec, props = {}, children = []) {
   if (classes.length) node.className = classes.join(' ');
   for (const [k, v] of Object.entries(props)) {
     if (k === 'class') node.className = v;
+    // `html` is a raw innerHTML sink — pass ONLY static, app-authored markup here. Anything
+    // derived from the document (metadata, filenames, text-layer, form values) MUST use `text`
+    // (or be escaped by the caller, as recovery.js does), or it becomes an XSS vector.
     else if (k === 'html') node.innerHTML = v;
     else if (k === 'text') node.textContent = v;
     else if (k === 'dataset') Object.assign(node.dataset, v);
@@ -3985,10 +4015,21 @@ function exitFolderMode() {
   emit('folder:changed', null);
 }
 
+// Guard user-initiated document replacement behind an unsaved-changes prompt. Returns
+// true to proceed. Used by every path a person can swap the open doc from — Open, New,
+// drag-drop, recent-reopen — mirroring the guard folder-stepping (openFileAt) already has.
+// Programmatic opens (agent face, URL mode, crash-recovery) call openBytes directly and
+// are intentionally NOT gated — they must not block on a modal.
+async function confirmDiscardIfDirty() {
+  if (!state.dirty) return true;
+  return await confirmModal(`Discard unsaved changes to ${state.session.fileName || 'this document'}?`, { title: 'Unsaved changes', okLabel: 'Discard', danger: true });
+}
+
 async function openPdf() {
   try {
     const picked = storage.hasFSA ? await storage.pickAndReadPdf() : await storage.readPdfViaInput();
     if (!picked) return;
+    if (!await confirmDiscardIfDirty()) return;
     await ensurePdfLib();
     await dispatch('open.bytes', { bytes: picked.bytes });
     state.session.fileName = picked.name;
@@ -4013,6 +4054,7 @@ async function openBytes(bytes, name = 'document.pdf', handle = null) {
 }
 
 async function newBlank() {
+  if (!await confirmDiscardIfDirty()) return;
   await ensurePdfLib();
   await dispatch('open.blank', { pages: 1 });
   state.session.fileName = 'untitled.pdf';
@@ -4130,7 +4172,7 @@ async function mergePdf() {
   }
 }
 
-return { openPdf, openBytes, newBlank, savePdf, savePdfAs, saveCopy, openFolder, openFileAt, nextFile, prevFile, mergePdf };
+return { confirmDiscardIfDirty, openPdf, openBytes, newBlank, savePdf, savePdfAs, saveCopy, openFolder, openFileAt, nextFile, prevFile, mergePdf };
 })();
 
 /* ui/savemenu.js */
@@ -5107,7 +5149,24 @@ async function onDown(e) {
   wrap.style.position = 'relative';
   wrap.appendChild(preview);
   window.addEventListener('pointermove', onMove);
-  window.addEventListener('pointerup', onUp, { once: true });
+  window.addEventListener('pointerup', onUp);
+  window.addEventListener('pointercancel', onCancel);
+}
+
+// Remove all three gesture listeners together, whichever way the gesture ends. (Using
+// pointerup {once} alone leaked pointermove when the stream was cancelled — L6.)
+function endGesture() {
+  window.removeEventListener('pointermove', onMove);
+  window.removeEventListener('pointerup', onUp);
+  window.removeEventListener('pointercancel', onCancel);
+}
+
+// Pointer stream cancelled (touch interrupted, released off-window) — tear down without
+// applying anything, so no stray preview lingers and no op fires.
+function onCancel() {
+  endGesture();
+  if (preview) { preview.remove(); preview = null; }
+  gesture = null;
 }
 
 function onMove(e) {
@@ -5139,7 +5198,7 @@ function drawPreview() {
 }
 
 function onUp() {
-  window.removeEventListener('pointermove', onMove);
+  endGesture();
   if (!gesture) return;
   const g = gesture; gesture = null;
   if (preview) { preview.remove(); preview = null; }
@@ -5253,6 +5312,41 @@ async function flatten() {
 return { openFormsDialog };
 })();
 
+/* core/saferegex.js */
+const __m_core_saferegex = (() => {
+// saferegex.js — a proportionate guard for regex sources that arrive from OUTSIDE the app
+// (the AI sidecar's describe-to-redact returns model-authored patterns we then run over
+// every text item). It is not a full ReDoS analyzer; it rejects the length/shape that make
+// catastrophic backtracking easy, before the pattern is ever compiled or executed.
+
+// The classic catastrophic shape: a group or char-class that itself contains an unbounded
+// quantifier, and is then quantified again — (a+)+ , (a*)* , (.+)+ , [a-z]+)* and friends.
+const NESTED_QUANTIFIER = /(\([^)]*[+*][^)]*\)|\[[^\]]*\][+*])\s*[+*]/;
+
+// A single source is safe to compile+run when it is a non-empty, bounded-length string with
+// no nested-unbounded-quantifier shape.
+function isSafeRegexSource(src, { maxLength = 200 } = {}) {
+  return typeof src === 'string'
+    && src.length > 0
+    && src.length <= maxLength
+    && !NESTED_QUANTIFIER.test(src);
+}
+
+// Compile up to `maxPatterns` safe sources into RegExp objects; silently drops unsafe or
+// uncompilable ones. Returns the compiled list (order preserved).
+function compileSafeRegexes(sources, { flags = 'gi', maxPatterns = 25, maxLength = 200 } = {}) {
+  const list = Array.isArray(sources) ? sources.slice(0, maxPatterns) : [];
+  return list
+    .map(src => {
+      if (!isSafeRegexSource(src, { maxLength })) return null;
+      try { return new RegExp(src, flags); } catch { return null; }
+    })
+    .filter(Boolean);
+}
+
+return { isSafeRegexSource, compileSafeRegexes };
+})();
+
 /* core/sidecar.js */
 const __m_core_sidecar = (() => {
 // sidecar.js — the AI sidecar surfaces. Each rides a REAL Sheaf surface, sends only
@@ -5266,6 +5360,7 @@ const __m_core_sidecar = (() => {
 const complete = __m_core_ai.complete;
 const isAvailable = __m_core_ai.isAvailable;
 const openForRender = __m_core_render.openForRender;
+const compileSafeRegexes = __m_core_saferegex.compileSafeRegexes;
 
 // Text items with normalized (0..1, top-left) boxes — for redaction targeting.
 async function pageTextItems(pdf, pageIndex) {
@@ -5311,7 +5406,9 @@ async function describeToRedact(doc, description) {
     { role: 'user', content: `The user wants to redact: "${description}". Return JSON {"patterns":["<regex source>", ...]} — JavaScript regular-expression sources (no slashes, no flags) that match such text. Be precise; prefer specific patterns over broad ones.` },
   ], { json: true });
   const sources = Array.isArray(out.patterns) ? out.patterns : [];
-  const patterns = sources.map(p => { try { return new RegExp(p, 'gi'); } catch { return null; } }).filter(Boolean);
+  // The pattern sources are model output — untrusted. Bound count/length and reject
+  // catastrophic-backtracking shapes before compiling+running them over the document (M4).
+  const patterns = compileSafeRegexes(sources);
   if (!patterns.length) return { regions: [], patterns: sources };
 
   const pdf = await openForRender(await doc.toBytes());
@@ -5574,13 +5671,12 @@ const el = __m_ui_dom.el;
 const clear = __m_ui_dom.clear;
 const icon = __m_ui_icons.icon;
 const state = __m_core_state.state;
+const savePrefs = __m_core_state.savePrefs;
 const on = __m_core_events.on;
-const emit = __m_core_events.emit;
 const dispatch = __m_core_runner.dispatch;
 const undo = __m_core_runner.undo;
 const redo = __m_core_runner.redo;
 const historyStatus = __m_core_runner.historyStatus;
-const savePrefs = __m_core_state.savePrefs;
 const selectedPages = __m_ui_thumbs.selectedPages;
 const openModal = __m_ui_modal.openModal;
 const confirmModal = __m_ui_modal.confirmModal;
@@ -5924,6 +6020,7 @@ const openPdf = __m_ui_fileops.openPdf;
 const newBlank = __m_ui_fileops.newBlank;
 const openBytes = __m_ui_fileops.openBytes;
 const openFolder = __m_ui_fileops.openFolder;
+const confirmDiscardIfDirty = __m_ui_fileops.confirmDiscardIfDirty;
 const hasFSA = __m_core_storage.hasFSA;
 const ensurePdfLib = __m_ui_engines_ui.ensurePdfLib;
 const toast = __m_ui_toast.toast;
@@ -5982,6 +6079,7 @@ async function renderRecent() {
 
 async function reopen(rec) {
   try {
+    if (!await confirmDiscardIfDirty()) return;
     if (!await storage.ensurePermission(rec.handle, 'read')) return toast('Permission denied', 'warn');
     await ensurePdfLib();
     const file = await rec.handle.getFile();
@@ -6002,6 +6100,7 @@ function wireGlobalDrop() {
     e.preventDefault(); dropEl()?.classList.remove('over');
     const file = [...(e.dataTransfer?.files || [])].find(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
     if (!file) return;
+    if (!await confirmDiscardIfDirty()) return;
     try {
       await ensurePdfLib();
       const bytes = new Uint8Array(await file.arrayBuffer());

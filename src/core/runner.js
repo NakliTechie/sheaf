@@ -126,6 +126,7 @@ export async function replayFromFloor() {
   let doc = await SheafDoc.fromBytes(floor.bytes, { validate: false });
   for (const { op, params } of state.history.opsUpToPointer()) {
     const def = getOp(op);
+    if (!def) throw new Error(`Replay hit unknown op "${op}"`);
     doc = (await runAndNormalize(doc, def, params)).doc;
   }
   return doc;
