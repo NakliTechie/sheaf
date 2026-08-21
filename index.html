@@ -2360,6 +2360,16 @@ const pageText = __m_core_render.pageText;
 const getEngine = __m_core_engines.getEngine;
 const dataUrlToBytes = __m_ops__util.dataUrlToBytes;
 
+// Pure, headless-testable: per-page extracted text → Markdown. Conservative — no heading
+// synthesis (the text layer carries no reliable font-size signal), just normalized
+// paragraphs with page breaks as horizontal rules.
+function pagesToMarkdown(pages) {
+  return (pages || [])
+    .map(t => String(t || '').replace(/\r\n?/g, '\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim())
+    .filter(Boolean)
+    .join('\n\n---\n\n');
+}
+
 const ops = [
   {
     id: 'convert.pageImage', label: 'Page → image', group: 'convert', icon: 'image',
@@ -2401,6 +2411,20 @@ const ops = [
   },
 
   {
+    id: 'convert.markdown', label: 'Extract as Markdown', group: 'convert', icon: 'textbox',
+    description: 'Extract the document text as Markdown — paragraphs preserved, page breaks as horizontal rules (---). Conservative (no heading guessing). Does not change the document.',
+    agentCallable: true, mutates: false,
+    params: {},
+    async run(doc) {
+      const pdf = await openForRender(await doc.toBytes());
+      const pages = [];
+      for (let i = 0; i < pdf.numPages; i++) pages.push(await pageText(pdf, i));
+      pdf.destroy?.();
+      return { artifact: { markdown: pagesToMarkdown(pages), pageCount: pages.length } };
+    },
+  },
+
+  {
     id: 'convert.split', label: 'Split to files', group: 'convert', icon: 'extract',
     description: 'Split the document into one single-page PDF per page. Returns an artifact list of { name, bytes } for the UI to bundle into a zip. Does not change the document.',
     agentCallable: true, mutates: false,
@@ -2420,7 +2444,7 @@ const ops = [
   },
 ];
 
-return { ops };
+return { pagesToMarkdown, ops };
 })();
 
 /* core/ocr.js */
@@ -4473,6 +4497,7 @@ function openConvertMenu() {
 
   const content = ({ close: c }) => { close = c; return el('div', { style: 'display:flex;flex-direction:column;gap:6px' }, [
     item('Extract text', 'Download the text layer as .txt', extractText),
+    item('Extract as Markdown', 'Download as .md — paragraphs + page breaks', extractMarkdown),
     item('Current page → image', 'Download this page as PNG or JPEG', currentPageImage),
     item('All pages → images (zip)', 'Render every page and download a .zip', allPagesZip),
     item('Split to single-page PDFs (zip)', 'One PDF per page, downloaded as a .zip', splitFiles),
@@ -4493,6 +4518,16 @@ async function extractText() {
     downloadText(text, `${baseName()}.txt`);
     toast('Text extracted', 'ok');
   } catch (e) { toast('Could not extract text', 'err', { detail: e.message }); }
+}
+
+async function extractMarkdown() {
+  try {
+    const res = await dispatch('convert.markdown', {}, { source: 'ui' });
+    const md = res.artifact?.markdown || '';
+    if (!md.trim()) return toast('No extractable text (try OCR for a scan)', 'warn');
+    downloadText(md, `${baseName()}.md`);
+    toast('Markdown extracted', 'ok');
+  } catch (e) { toast('Could not extract Markdown', 'err', { detail: e.message }); }
 }
 
 async function currentPageImage() {

@@ -20,6 +20,7 @@ export function openConvertMenu() {
 
   const content = ({ close: c }) => { close = c; return el('div', { style: 'display:flex;flex-direction:column;gap:6px' }, [
     item('Extract text', 'Download the text layer as .txt', extractText),
+    item('Extract as Markdown', 'Download as .md — paragraphs + page breaks', extractMarkdown),
     item('Current page → image', 'Download this page as PNG or JPEG', currentPageImage),
     item('All pages → images (zip)', 'Render every page and download a .zip', allPagesZip),
     item('Split to single-page PDFs (zip)', 'One PDF per page, downloaded as a .zip', splitFiles),
@@ -40,6 +41,16 @@ async function extractText() {
     downloadText(text, `${baseName()}.txt`);
     toast('Text extracted', 'ok');
   } catch (e) { toast('Could not extract text', 'err', { detail: e.message }); }
+}
+
+async function extractMarkdown() {
+  try {
+    const res = await dispatch('convert.markdown', {}, { source: 'ui' });
+    const md = res.artifact?.markdown || '';
+    if (!md.trim()) return toast('No extractable text (try OCR for a scan)', 'warn');
+    downloadText(md, `${baseName()}.md`);
+    toast('Markdown extracted', 'ok');
+  } catch (e) { toast('Could not extract Markdown', 'err', { detail: e.message }); }
 }
 
 async function currentPageImage() {

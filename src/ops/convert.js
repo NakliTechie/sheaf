@@ -8,6 +8,16 @@ import { openForRender, pageText } from '../core/render.js';
 import { getEngine } from '../core/engines.js';
 import { dataUrlToBytes } from './_util.js';
 
+// Pure, headless-testable: per-page extracted text → Markdown. Conservative — no heading
+// synthesis (the text layer carries no reliable font-size signal), just normalized
+// paragraphs with page breaks as horizontal rules.
+export function pagesToMarkdown(pages) {
+  return (pages || [])
+    .map(t => String(t || '').replace(/\r\n?/g, '\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim())
+    .filter(Boolean)
+    .join('\n\n---\n\n');
+}
+
 export const ops = [
   {
     id: 'convert.pageImage', label: 'Page → image', group: 'convert', icon: 'image',
@@ -45,6 +55,20 @@ export const ops = [
       for (let i = 0; i < pdf.numPages; i++) pages.push(await pageText(pdf, i));
       pdf.destroy?.();
       return { artifact: { text: pages.join('\n\n'), pageCount: pages.length, pages } };
+    },
+  },
+
+  {
+    id: 'convert.markdown', label: 'Extract as Markdown', group: 'convert', icon: 'textbox',
+    description: 'Extract the document text as Markdown — paragraphs preserved, page breaks as horizontal rules (---). Conservative (no heading guessing). Does not change the document.',
+    agentCallable: true, mutates: false,
+    params: {},
+    async run(doc) {
+      const pdf = await openForRender(await doc.toBytes());
+      const pages = [];
+      for (let i = 0; i < pdf.numPages; i++) pages.push(await pageText(pdf, i));
+      pdf.destroy?.();
+      return { artifact: { markdown: pagesToMarkdown(pages), pageCount: pages.length } };
     },
   },
 

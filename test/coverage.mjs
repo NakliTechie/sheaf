@@ -9,6 +9,7 @@ import { registerEngine } from '../src/core/engines.js';
 import { registerOps } from '../src/ops/index.js';
 import { dispatch } from '../src/core/runner.js';
 import { state } from '../src/core/state.js';
+import { pagesToMarkdown } from '../src/ops/convert.js';
 
 let passed = 0, failed = 0;
 const ok = (n, c) => { c ? passed++ : failed++; console.log(`  ${c ? '✓' : '✗'} ${n}`); };
@@ -48,6 +49,13 @@ async function main() {
   ok('author persisted', rl.getAuthor() === 'A');
   ok('subject persisted', rl.getSubject() === 'S');
   ok('keywords persisted', (rl.getKeywords() || '').includes('k1') && (rl.getKeywords() || '').includes('k2'));
+
+  console.log('\nconvert.markdown — pagesToMarkdown formatting (UB-6)');
+  ok('pages joined with --- rule', pagesToMarkdown(['a', 'b']) === 'a\n\n---\n\nb');
+  ok('3+ newlines collapse to a paragraph break', pagesToMarkdown(['x\n\n\n\ny']) === 'x\n\ny');
+  ok('empty/whitespace pages dropped', pagesToMarkdown(['', 'keep', '   ']) === 'keep');
+  ok('single page → no separator', pagesToMarkdown(['only']) === 'only');
+  ok('null-safe', pagesToMarkdown(null) === '' && pagesToMarkdown([null, 'z']) === 'z');
 
   console.log(`\n${failed === 0 ? 'PASS' : 'FAIL'} — ${passed} passed, ${failed} failed\n`);
   if (failed) process.exit(1);
