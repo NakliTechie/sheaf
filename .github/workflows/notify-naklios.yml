@@ -1,0 +1,25 @@
+name: Notify NakliOS to re-mirror
+
+# Sheaf is mirrored same-origin under naklios.dev/apps/sheaf/ (index.html + the
+# vendored /engines). When a distributable file changes here, ask nakli-dev to
+# re-sync the mirror. Without the optional NAKLIOS_DISPATCH_TOKEN secret this is a
+# no-op and nakli-dev's six-hour scheduled sync discovers the change instead.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - 'engines/**'
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    env:
+      DISPATCH_TOKEN: ${{ secrets.NAKLIOS_DISPATCH_TOKEN }}
+    steps:
+      - if: env.DISPATCH_TOKEN != ''
+        run: gh workflow run sync-mirrors.yml --repo NakliTechie/nakli-dev --ref main
+        env:
+          GH_TOKEN: ${{ env.DISPATCH_TOKEN }}
+      - if: env.DISPATCH_TOKEN == ''
+        run: echo "No NAKLIOS_DISPATCH_TOKEN set — nakli-dev's scheduled sync will pick up the change."
