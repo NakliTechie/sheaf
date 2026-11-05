@@ -12,7 +12,7 @@ import { registerOps } from '../src/ops/index.js';
 import { dispatch, replayFromFloor } from '../src/core/runner.js';
 import { state } from '../src/core/state.js';
 import { catalog } from '../src/core/registry.js';
-import { createCommandHandlers, registerCommands, runnableOps } from '../src/core/commands.js';
+import { commandFor, createCommandHandlers, registerCommands, runnableOps } from '../src/core/commands.js';
 
 let passed = 0, failed = 0;
 const ok = (n, c) => {
@@ -58,7 +58,7 @@ async function hostedRun({ parent, sdk = true, fetchImpl, registerImpl }) {
   return calls;
 }
 
-let handlers, run, runnable;
+let handlers, run, destroy, runnable;
 
 async function manifestRules() {
   console.log('commands.json against the host catalog rules');
@@ -74,8 +74,14 @@ async function manifestRules() {
 async function manifestMatchesHandlers() {
   console.log('\ncommands.json and the handlers match');
   ok('every command has a handler and every handler a command', same(commands.map(c => c.name).toSorted(), Object.keys(handlers).toSorted()));
-  const opRule = commands.find(c => c.name === 'operation.run').input.properties.op;
-  ok('the op enum is exactly the runnable ops', same([...opRule.enum].toSorted(), [...runnable].toSorted()));
+  const rule = (name) => commands.find(c => c.name === name);
+  const writeOps = rule('operation.run').input.properties.op.enum;
+  const destructiveOps = rule('operation.run_destructive').input.properties.op.enum;
+  ok('the two op enums together are exactly the runnable ops', same([...writeOps, ...destructiveOps].toSorted(), [...runnable].toSorted()));
+  ok('each enum lists only its own ops', writeOps.every(id => commandFor(id) === 'operation.run') && destructiveOps.every(id => commandFor(id) === 'operation.run_destructive'));
+  ok('operation.run is write and the other destructive', rule('operation.run').scope === 'write' && rule('operation.run_destructive').scope === 'destructive');
+  ok('every op that removes or hides content is destructive', ['pages.delete', 'pages.keepRange', 'pages.extract', 'pages.crop', 'pages.nUp', 'forms.flatten', 'forms.fill', 'text.whiteout', 'redact.region', 'annotate.rect', 'annotate.highlight'].every(id => destructiveOps.includes(id)));
+  ok('signing runs through neither command', !runnable.includes('sign.place'));
   ok('no open op is runnable', !runnable.some(id => id.startsWith('open.')));
   ok('no artifact op is runnable', !runnable.includes('convert.text') && !runnable.includes('forms.detect'));
   ok('no op that takes bytes is runnable', !runnable.includes('pages.merge') && !runnable.includes('pages.insertImages'));
@@ -85,7 +91,7 @@ async function noDocument() {
   console.log('\nwith no document open');
   state.doc = null;
   ok('document.read says none is open', same(await handlers['document.read']({}), { open: false, message: 'No PDF is open in Sheaf.' }));
-  ok('operation.run refuses', await rejects(() => run({ op: 'pages.reverse' }), /No document open/));
+  ok('operation.run refuses', await rejects(() => run({ op: 'pages.rotate', params: { pages: [0], angle: 90 } }), /No document open/));
   ok('operation.undo refuses', await rejects(() => handlers['operation.undo']({}), /No PDF is open/));
 }
 
@@ -96,6 +102,7 @@ async function reads() {
   state.session.files = [];
   const list = await handlers['operations.list']({});
   ok('operations.list gives the runnable ops', same(list.operations.map(o => o.id), runnable));
+  ok('operations.list names the command for each op', list.operations.every(o => o.command === commandFor(o.id)));
   ok('operations.list is plain data', same(structuredClone(list), JSON.parse(JSON.stringify(list))));
   const doc = await handlers['document.read']({});
   ok('document.read gives name and page count', doc.fileName === 'contract.pdf' && doc.pageCount === 3 && doc.pages.length === 3);
@@ -119,34 +126,55 @@ async function operationRun() {
   ok('the op ran through the runner', state.doc.pages()[0].rotation === 90 && state.history.size === 1);
   ok('the result is plain data with no document', same(structuredClone(result), JSON.parse(JSON.stringify(result))) && !('doc' in result));
   ok('the result reports the unsaved change', result.op === 'pages.rotate' && result.pageCount === 3 && result.unsaved === true && result.canUndo === true);
-  ok('an op with no params needs no params key', (await run({ op: 'pages.reverse' })).pageCount === 3);
+  ok('an op with no params needs no params key', (await run({ op: 'marks.border' })).pageCount === 3);
   ok('bad params come back as an error', await rejects(() => run({ op: 'pages.rotate', params: { pages: 'all' } }), /./));
   const before = state.history.size;
+  ok('operation.run refuses a destructive op', await rejects(() => run({ op: 'pages.delete', params: { pages: [0] } }), /runs through operation\.run_destructive/));
+  ok('operation.run_destructive refuses a write op', await rejects(() => destroy({ op: 'pages.rotate', params: { pages: [0], angle: 90 } }), /runs through operation\.run\./));
   ok('an open op is refused', await rejects(() => run({ op: 'open.blank' }), /cannot run as a command/));
   ok('an artifact op is refused', await rejects(() => run({ op: 'convert.text' }), /cannot run as a command/));
   ok('a bytes op is refused', await rejects(() => run({ op: 'pages.merge' }), /cannot run as a command/));
   ok('an unknown op is refused', await rejects(() => run({ op: 'pages.nothing' }), /cannot run as a command/));
+  ok('operation.run_destructive refuses signing', await rejects(() => destroy({ op: 'sign.place', params: { page: 0, x: 0.1, y: 0.1, name: 'A' } }), /cannot run as a command/));
   ok('refused ops leave the document alone', state.doc.pageCount() === 3 && state.history.size === before);
+  const removed = await destroy({ op: 'pages.delete', params: { pages: [0] } });
+  ok('operation.run_destructive runs its own op', removed.op === 'pages.delete' && removed.pageCount === 2 && state.doc.pageCount() === 2);
 }
 
 async function concurrentCalls() {
   console.log('\nconcurrent calls');
   await open(4);
   await Promise.all([
-    run({ op: 'pages.delete', params: { pages: [0] } }),
-    run({ op: 'pages.delete', params: { pages: [0] } }),
-    run({ op: 'pages.reverse' }),
+    destroy({ op: 'pages.delete', params: { pages: [0] } }),
+    destroy({ op: 'pages.delete', params: { pages: [0] } }),
+    destroy({ op: 'pages.reverse' }),
   ]);
   ok('each call saw the result of the one before', state.doc.pageCount() === 2 && state.history.size === 3);
   ok('the op-log replays to the live document', await replayFromFloor().then(d => same(d.fingerprint(), state.doc.fingerprint())));
   await rejects(() => run({ op: 'pages.rotate', params: { pages: [99], angle: 90 } }), /./);
-  ok('a failed call does not block the next', (await run({ op: 'pages.reverse' })).pageCount === 2);
+  ok('a failed call does not block the next', (await run({ op: 'marks.border' })).pageCount === 2);
+
+  console.log('\ncancellation');
+  await open(2);
+  const rotate = { op: 'pages.rotate', params: { pages: [0], angle: 90 } };
+  const stopped = new AbortController();
+  stopped.abort();
+  ok('a call cancelled before it was made does not start', await rejects(() => run(rotate, { signal: stopped.signal }), /cancelled/) && state.history.size === 0);
+  const gaveUp = new AbortController();
+  const first = run(rotate, {});
+  const queued = destroy({ op: 'pages.delete', params: { pages: [0] } }, { signal: gaveUp.signal });
+  const undoQueued = handlers['operation.undo']({}, { signal: gaveUp.signal });
+  gaveUp.abort();
+  await first;
+  ok('a queued call cancelled while waiting does not start', await rejects(() => queued, /cancelled/) && state.doc.pageCount() === 2 && state.history.size === 1);
+  ok('a queued undo cancelled while waiting does not start', await rejects(() => undoQueued, /cancelled/) && state.history.size === 1 && state.history.canUndo());
+  ok('a cancelled call does not block the next', (await run(rotate, { signal: new AbortController().signal })).pageCount === 2 && state.history.size === 2);
 }
 
 async function operationUndo() {
   console.log('\noperation.undo');
   await open(2);
-  await run({ op: 'pages.delete', params: { pages: [1] } });
+  await destroy({ op: 'pages.delete', params: { pages: [1] } });
   const undone = await handlers['operation.undo']({});
   ok('undo restores the page', undone.undone === true && undone.pageCount === 2 && state.doc.pageCount() === 2);
   ok('undo with nothing left says so', (await handlers['operation.undo']({})).undone === false);
@@ -188,6 +216,7 @@ async function main() {
   registerOps();
   handlers = createCommandHandlers();
   run = handlers['operation.run'];
+  destroy = handlers['operation.run_destructive'];
   runnable = runnableOps(catalog({ agentCallableOnly: true })).map(o => o.id);
 
   for (const section of [manifestRules, manifestMatchesHandlers, noDocument, reads, operationRun, concurrentCalls, operationUndo, registration, vendoredSdk]) await section();

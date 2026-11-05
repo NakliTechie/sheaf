@@ -14,7 +14,7 @@
     },
     {
       "name": "operation.run",
-      "description": "Change the PDF open in the Sheaf PDF editor, e.g. \"rotate the first page of my PDF\", and the file on disk stays as it was until the person saves.",
+      "description": "Change the PDF open in the Sheaf PDF editor without removing anything, e.g. \"rotate the first page of my PDF\", and the file on disk stays as it was until the person saves.",
       "scope": "write",
       "input": {
         "type": "object",
@@ -24,29 +24,50 @@
             "description": "The operation id from operations.list, e.g. \"pages.rotate\"",
             "enum": [
               "pages.rotate",
-              "pages.crop",
-              "pages.delete",
-              "pages.reorder",
               "pages.orient",
-              "pages.keepRange",
               "pages.addMargin",
-              "pages.nUp",
-              "pages.reverse",
-              "pages.duplicate",
-              "pages.extract",
               "pages.insertBlank",
               "pages.scale",
-              "metadata.set",
               "marks.watermark",
               "marks.pageNumbers",
               "marks.bates",
               "marks.text",
               "marks.border",
-              "annotate.highlight",
-              "annotate.rect",
               "annotate.line",
               "annotate.pencil",
-              "annotate.textbox",
+              "annotate.textbox"
+            ]
+          },
+          "params": {
+            "type": "object",
+            "description": "The operation's params from operations.list, e.g. {\"pages\":[0],\"angle\":90}. Page numbers count from 0, so the first page is 0"
+          }
+        },
+        "required": ["op"]
+      }
+    },
+    {
+      "name": "operation.run_destructive",
+      "description": "Remove, replace or hide content in the PDF open in the Sheaf PDF editor, e.g. \"delete the second page of my PDF\", after the person agrees to this one change.",
+      "scope": "destructive",
+      "input": {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "description": "The operation id from operations.list, e.g. \"pages.delete\"",
+            "enum": [
+              "pages.crop",
+              "pages.delete",
+              "pages.reorder",
+              "pages.keepRange",
+              "pages.nUp",
+              "pages.reverse",
+              "pages.duplicate",
+              "pages.extract",
+              "metadata.set",
+              "annotate.highlight",
+              "annotate.rect",
               "forms.fill",
               "forms.flatten",
               "text.whiteout",
@@ -55,7 +76,7 @@
           },
           "params": {
             "type": "object",
-            "description": "The operation's params from operations.list, e.g. {\"pages\":[0],\"angle\":90}. Page numbers count from 0, so the first page is 0"
+            "description": "The operation's params from operations.list, e.g. {\"pages\":[1]}. Page numbers count from 0, so the first page is 0"
           }
         },
         "required": ["op"]

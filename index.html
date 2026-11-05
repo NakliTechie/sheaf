@@ -404,7 +404,7 @@ button { font-family: inherit; font-size: inherit; color: inherit; }
   <!-- The NakliOS SDK: no-ops standalone. Refreshed by scripts/vendor-naklios-sdk.mjs. -->
   <script>
 /* oxlint-disable -- vendored here, and the built index.html is generated: lint the sources, as the house config does for vendor/ and dist/. */
-/* naklios-sdk:begin ver=2 sha256=cf379ac9503b2f31bfdcea73702e36a8c0aa5ecf188e43c76fd2353c3404e5e9 — DO NOT EDIT until :end; run `node scripts/vendor-naklios-sdk.mjs` */
+/* naklios-sdk:begin ver=2 sha256=c8d83eef0c0c141840516e03da98e6c1139ed40bb3556f4aa4699f475fa5e737 — DO NOT EDIT until :end; run `node scripts/vendor-naklios-sdk.mjs` */
 /*!
  * naklios.js — cooperative SDK for apps hosted inside NakliOS (Immersive mode)
  *
@@ -571,6 +571,7 @@ button { font-family: inherit; font-size: inherit; color: inherit; }
   var ragSearches = new Map();     // requestId → semantic-search progress callback
   var fileOpenListeners = new Set(); // exact-file grants delivered by the host
   var commandHandlers = new Map(); // command name → handler (common rail step 1)
+  var commandCalls = new Map(); // invokeId → AbortController of a running handler
   var pendingFileGrants = [];
   var fileEditListeners = new Set();
   var pendingFileEdits = [];
@@ -1113,12 +1114,23 @@ button { font-family: inherit; font-size: inherit; color: inherit; }
       var invokeId = msg.invokeId;
       var handler = commandHandlers.get(msg.name);
       if (!handler) { send('naklios:commands:result', { invokeId: invokeId, error: 'unknown command: ' + String(msg.name) }); return; }
-      Promise.resolve().then(function () { return handler(msg.args || {}, { caller: msg.caller || null }); }).then(
+      var controller = new AbortController();
+      commandCalls.set(invokeId, controller);
+      Promise.resolve().then(function () { return handler(msg.args || {}, { caller: msg.caller || null, signal: controller.signal }); }).then(
         function (result) {
-          try { send('naklios:commands:result', { invokeId: invokeId, result: result === undefined ? null : result }); }
-          catch (error) { send('naklios:commands:result', { invokeId: invokeId, error: 'result could not be sent: ' + String(error && error.message || error) }); }
+          commandCalls.delete(invokeId);
+          // send() reports a value that cannot be cloned by returning false.
+          if (send('naklios:commands:result', { invokeId: invokeId, result: result === undefined ? null : result }) === false)
+            send('naklios:commands:result', { invokeId: invokeId, error: 'the command result could not be sent' });
         },
-        function (error) { send('naklios:commands:result', { invokeId: invokeId, error: String(error && error.message || error) }); });
+        function (error) {
+          commandCalls.delete(invokeId);
+          send('naklios:commands:result', { invokeId: invokeId, error: String(error && error.message || error) });
+        });
+    } else if (msg.type === 'naklios:commands:cancel' && typeof msg.invokeId === 'string') {
+      // The caller stopped waiting. A handler reads this through its `signal`; work already done stays done.
+      var running = commandCalls.get(msg.invokeId);
+      if (running) { commandCalls.delete(msg.invokeId); running.abort(); }
     } else if (msg.type === 'naklios:review:discard' && msg.proposal_id) {
       if (reviewDecisionHandler) {
         Promise.resolve().then(function () {
@@ -4584,15 +4596,27 @@ const COMMAND_LIST_LIMIT = 50;
 
 const takesBytes = (param) => param.type === 'bytes' || param.items?.type === 'bytes';
 
-// What operation.run accepts: the agent-callable ops that change the open document and
-// need nothing a caller cannot send. Left out: open ops, which replace the document and
-// clear its undo history; artifact ops, whose output a command could not hand over; and
-// ops that take file bytes; and signing, because a signature is the person's own act.
-// Every op left in stays in memory and undoable until the person saves, and no command
-// saves, which is why operation.run is `write`.
+// What a command may run: the agent-callable ops that change the open document and need
+// nothing a caller cannot send. Left out: open ops, which replace the document and clear
+// its undo history; artifact ops, whose output a command could not hand over; ops that
+// take file bytes; and signing, because a signature is the person's own act. Everything
+// left in stays in memory and undoable until the person saves, and no command saves.
 function runnableOps(ops) {
   return ops.filter(op => op.mutates && op.group !== 'open' && op.id !== 'sign.place' && !Object.values(op.params).some(takesBytes));
 }
+
+// The runnable ops that can lose something, so they run through operation.run_destructive
+// and the host asks the person each time. One consent to add a page number must not cover
+// these. pages.reorder, pages.reverse and pages.duplicate are here because they rebuild the
+// document and drop its form fields. annotate.rect and annotate.highlight can draw an opaque
+// block, which is a whiteout by another name. forms.fill and metadata.set replace old values.
+const DESTRUCTIVE_OPS = new Set([
+  'pages.crop', 'pages.delete', 'pages.reorder', 'pages.keepRange', 'pages.nUp', 'pages.reverse',
+  'pages.duplicate', 'pages.extract', 'metadata.set', 'annotate.highlight', 'annotate.rect',
+  'forms.fill', 'forms.flatten', 'text.whiteout', 'redact.region',
+]);
+
+const commandFor = (id) => (DESTRUCTIVE_OPS.has(id) ? 'operation.run_destructive' : 'operation.run');
 
 function createCommandHandlers() {
   const core = buildApi();
@@ -4600,8 +4624,12 @@ function createCommandHandlers() {
   // One change at a time: two concurrent ops would both start from the same document
   // and the op-log would no longer replay to what is on screen.
   let queue = Promise.resolve();
-  const inTurn = (work) => {
-    const turn = queue.then(work);
+  // A caller that gave up while queued has its signal aborted; its work never starts.
+  const inTurn = (work, signal) => {
+    const turn = queue.then(() => {
+      if (signal?.aborted) throw new Error('The call was cancelled before it started.');
+      return work();
+    });
     queue = turn.catch(() => {});
     return turn;
   };
@@ -4610,9 +4638,18 @@ function createCommandHandlers() {
     return { fileName, pageCount, unsaved: dirty, canUndo: history.canUndo };
   };
 
+  // Each command runs only its own ops, so a caller cannot reach a destructive op
+  // through the consent given to operation.run.
+  const runThrough = (command) => ({ op, params = {} }, { signal } = {}) => inTurn(async () => {
+    if (!runnableOps(core.ops()).some(o => o.id === op)) throw new Error(`Operation "${op}" cannot run as a command.`);
+    if (commandFor(op) !== command) throw new Error(`Operation "${op}" runs through ${commandFor(op)}.`);
+    const { warning } = await core.run(op, params);
+    return { op, ...summary(), ...(warning ? { warning } : {}) };
+  }, signal);
+
   return {
     'operations.list'() {
-      return { operations: runnableOps(core.ops()) };
+      return { operations: runnableOps(core.ops()).map(op => ({ ...op, command: commandFor(op.id) })) };
     },
 
     'document.read'() {
@@ -4628,19 +4665,15 @@ function createCommandHandlers() {
       };
     },
 
-    'operation.run'({ op, params = {} }) {
-      return inTurn(async () => {
-        if (!runnableOps(core.ops()).some(o => o.id === op)) throw new Error(`Operation "${op}" cannot run as a command.`);
-        const { warning } = await core.run(op, params);
-        return { op, ...summary(), ...(warning ? { warning } : {}) };
-      });
-    },
+    'operation.run': runThrough('operation.run'),
 
-    'operation.undo'() {
+    'operation.run_destructive': runThrough('operation.run_destructive'),
+
+    'operation.undo'(_args, { signal } = {}) {
       return inTurn(async () => {
         if (!core.context().open) throw new Error('No PDF is open in Sheaf.');
         return { undone: await core.undo(), ...summary() };
-      });
+      }, signal);
     },
   };
 }
@@ -4657,7 +4690,7 @@ function registerCommands() {
   ).catch(error => console.warn('[sheaf] commands could not register', error));
 }
 
-return { runnableOps, createCommandHandlers, registerCommands };
+return { runnableOps, commandFor, createCommandHandlers, registerCommands };
 })();
 
 /* core/storage.js */

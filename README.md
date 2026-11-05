@@ -47,8 +47,9 @@ The operation log replays without Sheaf's UI and without any model.
 - **Developer door:** turn on **Agent face** in Settings to get `window.sheaf` and `?op=<id>&p.<name>=<value>` URL
   mode. Both are off by default, so a link cannot run an operation on your file.
 - **NakliOS door:** inside NakliOS, the desktop's voice assistant and Anvil call the commands in `commands.json`.
-  The desktop checks each caller's grant and asks you before a change. This door does not need the developer
-  setting, and no command saves a file, reads page text or opens a new document.
+  The desktop checks each caller's grant, asks you once before a change, and asks you every time before one that
+  removes, replaces or hides content. This door does not need the developer setting, and no command saves a file,
+  reads page text or opens a new document.
 
 ## Commands
 
@@ -58,7 +59,8 @@ npm run build            # bundle src/ into index.html and _headers
 node scripts/vendor-naklios-sdk.mjs --file src/index.html   # refresh the inlined NakliOS SDK
 ```
 
-The NakliOS commands: `sheaf.operations.list`, `sheaf.document.read`, `sheaf.operation.run`, `sheaf.operation.undo`.
+The NakliOS commands: `sheaf.operations.list`, `sheaf.document.read`, `sheaf.operation.run`,
+`sheaf.operation.run_destructive`, `sheaf.operation.undo`.
 
 ## Verify it yourself
 

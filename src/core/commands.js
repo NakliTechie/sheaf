@@ -16,15 +16,27 @@ const COMMAND_LIST_LIMIT = 50;
 
 const takesBytes = (param) => param.type === 'bytes' || param.items?.type === 'bytes';
 
-// What operation.run accepts: the agent-callable ops that change the open document and
-// need nothing a caller cannot send. Left out: open ops, which replace the document and
-// clear its undo history; artifact ops, whose output a command could not hand over; and
-// ops that take file bytes; and signing, because a signature is the person's own act.
-// Every op left in stays in memory and undoable until the person saves, and no command
-// saves, which is why operation.run is `write`.
+// What a command may run: the agent-callable ops that change the open document and need
+// nothing a caller cannot send. Left out: open ops, which replace the document and clear
+// its undo history; artifact ops, whose output a command could not hand over; ops that
+// take file bytes; and signing, because a signature is the person's own act. Everything
+// left in stays in memory and undoable until the person saves, and no command saves.
 export function runnableOps(ops) {
   return ops.filter(op => op.mutates && op.group !== 'open' && op.id !== 'sign.place' && !Object.values(op.params).some(takesBytes));
 }
+
+// The runnable ops that can lose something, so they run through operation.run_destructive
+// and the host asks the person each time. One consent to add a page number must not cover
+// these. pages.reorder, pages.reverse and pages.duplicate are here because they rebuild the
+// document and drop its form fields. annotate.rect and annotate.highlight can draw an opaque
+// block, which is a whiteout by another name. forms.fill and metadata.set replace old values.
+const DESTRUCTIVE_OPS = new Set([
+  'pages.crop', 'pages.delete', 'pages.reorder', 'pages.keepRange', 'pages.nUp', 'pages.reverse',
+  'pages.duplicate', 'pages.extract', 'metadata.set', 'annotate.highlight', 'annotate.rect',
+  'forms.fill', 'forms.flatten', 'text.whiteout', 'redact.region',
+]);
+
+export const commandFor = (id) => (DESTRUCTIVE_OPS.has(id) ? 'operation.run_destructive' : 'operation.run');
 
 export function createCommandHandlers() {
   const core = buildApi();
@@ -32,8 +44,12 @@ export function createCommandHandlers() {
   // One change at a time: two concurrent ops would both start from the same document
   // and the op-log would no longer replay to what is on screen.
   let queue = Promise.resolve();
-  const inTurn = (work) => {
-    const turn = queue.then(work);
+  // A caller that gave up while queued has its signal aborted; its work never starts.
+  const inTurn = (work, signal) => {
+    const turn = queue.then(() => {
+      if (signal?.aborted) throw new Error('The call was cancelled before it started.');
+      return work();
+    });
     queue = turn.catch(() => {});
     return turn;
   };
@@ -42,9 +58,18 @@ export function createCommandHandlers() {
     return { fileName, pageCount, unsaved: dirty, canUndo: history.canUndo };
   };
 
+  // Each command runs only its own ops, so a caller cannot reach a destructive op
+  // through the consent given to operation.run.
+  const runThrough = (command) => ({ op, params = {} }, { signal } = {}) => inTurn(async () => {
+    if (!runnableOps(core.ops()).some(o => o.id === op)) throw new Error(`Operation "${op}" cannot run as a command.`);
+    if (commandFor(op) !== command) throw new Error(`Operation "${op}" runs through ${commandFor(op)}.`);
+    const { warning } = await core.run(op, params);
+    return { op, ...summary(), ...(warning ? { warning } : {}) };
+  }, signal);
+
   return {
     'operations.list'() {
-      return { operations: runnableOps(core.ops()) };
+      return { operations: runnableOps(core.ops()).map(op => ({ ...op, command: commandFor(op.id) })) };
     },
 
     'document.read'() {
@@ -60,19 +85,15 @@ export function createCommandHandlers() {
       };
     },
 
-    'operation.run'({ op, params = {} }) {
-      return inTurn(async () => {
-        if (!runnableOps(core.ops()).some(o => o.id === op)) throw new Error(`Operation "${op}" cannot run as a command.`);
-        const { warning } = await core.run(op, params);
-        return { op, ...summary(), ...(warning ? { warning } : {}) };
-      });
-    },
+    'operation.run': runThrough('operation.run'),
 
-    'operation.undo'() {
+    'operation.run_destructive': runThrough('operation.run_destructive'),
+
+    'operation.undo'(_args, { signal } = {}) {
       return inTurn(async () => {
         if (!core.context().open) throw new Error('No PDF is open in Sheaf.');
         return { undone: await core.undo(), ...summary() };
-      });
+      }, signal);
     },
   };
 }

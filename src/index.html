@@ -41,7 +41,7 @@
   <!-- The NakliOS SDK: no-ops standalone. Refreshed by scripts/vendor-naklios-sdk.mjs. -->
   <script>
 /* oxlint-disable -- vendored here, and the built index.html is generated: lint the sources, as the house config does for vendor/ and dist/. */
-/* naklios-sdk:begin ver=2 sha256=cf379ac9503b2f31bfdcea73702e36a8c0aa5ecf188e43c76fd2353c3404e5e9 — DO NOT EDIT until :end; run `node scripts/vendor-naklios-sdk.mjs` */
+/* naklios-sdk:begin ver=2 sha256=c8d83eef0c0c141840516e03da98e6c1139ed40bb3556f4aa4699f475fa5e737 — DO NOT EDIT until :end; run `node scripts/vendor-naklios-sdk.mjs` */
 /*!
  * naklios.js — cooperative SDK for apps hosted inside NakliOS (Immersive mode)
  *
@@ -208,6 +208,7 @@
   var ragSearches = new Map();     // requestId → semantic-search progress callback
   var fileOpenListeners = new Set(); // exact-file grants delivered by the host
   var commandHandlers = new Map(); // command name → handler (common rail step 1)
+  var commandCalls = new Map(); // invokeId → AbortController of a running handler
   var pendingFileGrants = [];
   var fileEditListeners = new Set();
   var pendingFileEdits = [];
@@ -750,12 +751,23 @@
       var invokeId = msg.invokeId;
       var handler = commandHandlers.get(msg.name);
       if (!handler) { send('naklios:commands:result', { invokeId: invokeId, error: 'unknown command: ' + String(msg.name) }); return; }
-      Promise.resolve().then(function () { return handler(msg.args || {}, { caller: msg.caller || null }); }).then(
+      var controller = new AbortController();
+      commandCalls.set(invokeId, controller);
+      Promise.resolve().then(function () { return handler(msg.args || {}, { caller: msg.caller || null, signal: controller.signal }); }).then(
         function (result) {
-          try { send('naklios:commands:result', { invokeId: invokeId, result: result === undefined ? null : result }); }
-          catch (error) { send('naklios:commands:result', { invokeId: invokeId, error: 'result could not be sent: ' + String(error && error.message || error) }); }
+          commandCalls.delete(invokeId);
+          // send() reports a value that cannot be cloned by returning false.
+          if (send('naklios:commands:result', { invokeId: invokeId, result: result === undefined ? null : result }) === false)
+            send('naklios:commands:result', { invokeId: invokeId, error: 'the command result could not be sent' });
         },
-        function (error) { send('naklios:commands:result', { invokeId: invokeId, error: String(error && error.message || error) }); });
+        function (error) {
+          commandCalls.delete(invokeId);
+          send('naklios:commands:result', { invokeId: invokeId, error: String(error && error.message || error) });
+        });
+    } else if (msg.type === 'naklios:commands:cancel' && typeof msg.invokeId === 'string') {
+      // The caller stopped waiting. A handler reads this through its `signal`; work already done stays done.
+      var running = commandCalls.get(msg.invokeId);
+      if (running) { commandCalls.delete(msg.invokeId); running.abort(); }
     } else if (msg.type === 'naklios:review:discard' && msg.proposal_id) {
       if (reviewDecisionHandler) {
         Promise.resolve().then(function () {
