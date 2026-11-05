@@ -4587,10 +4587,11 @@ const takesBytes = (param) => param.type === 'bytes' || param.items?.type === 'b
 // What operation.run accepts: the agent-callable ops that change the open document and
 // need nothing a caller cannot send. Left out: open ops, which replace the document and
 // clear its undo history; artifact ops, whose output a command could not hand over; and
-// ops that take file bytes. Every op left in stays in memory and undoable until the
-// person saves, and no command saves, which is why operation.run is `write`.
+// ops that take file bytes; and signing, because a signature is the person's own act.
+// Every op left in stays in memory and undoable until the person saves, and no command
+// saves, which is why operation.run is `write`.
 function runnableOps(ops) {
-  return ops.filter(op => op.mutates && op.group !== 'open' && !Object.values(op.params).some(takesBytes));
+  return ops.filter(op => op.mutates && op.group !== 'open' && op.id !== 'sign.place' && !Object.values(op.params).some(takesBytes));
 }
 
 function createCommandHandlers() {

@@ -50,8 +50,7 @@
               "forms.fill",
               "forms.flatten",
               "text.whiteout",
-              "redact.region",
-              "sign.place"
+              "redact.region"
             ]
           },
           "params": {
