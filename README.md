@@ -1,65 +1,79 @@
-# Sheaf
+<h1 align="center">Sheaf</h1>
 
-> Browser-native PDF editor. One HTML file. Every operation. Your document, your disk. No account, no upload, no telemetry, no limits — and an agent face none of the others have.
+<p align="center">
+  <strong>A PDF editor in one HTML file: merge, split, sign, redact, fill, OCR, annotate,<br>
+  compress and convert, with the PDF staying on your disk.</strong>
+</p>
 
-**Status:** v0.1 spec · pre-build · 2026-06-21
-**Deploy target:** sheaf.naklitechie.com (static host)
-**Suite:** Bench creative suite — **tool 1 of 5** (Sheaf → vector → audio → layout → compositor)
+<p align="center">
+  Any modern browser. No account, no upload, no telemetry, no limits.
+</p>
 
-Sheaf is a single-HTML-file PDF editor that opens a PDF straight off the user's
-filesystem and performs the full document-model toolset — merge, split, reorder,
-sign, redact, fill, OCR, annotate, compress, convert — entirely in the browser.
-No server, no account, no upload, no watermark, no daily cap, no telemetry. The
-PDF never leaves the device. The exported file is a published open standard that
-replays without Sheaf and without any model.
+<p align="center">
+  <a href="LICENSE"><img alt="AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-3fb950?style=flat-square"></a>
+  <img alt="no account" src="https://img.shields.io/badge/account-none-3fb950?style=flat-square">
+  <img alt="no upload" src="https://img.shields.io/badge/upload-none-3fb950?style=flat-square">
+</p>
 
-It is the **document-model** half of the suite's raster/document split: Slate
-(shipped image editor) treats a PDF page as a *pixel surface*; Sheaf treats a PDF
-as a *document object* — pages, the AcroForm tree, the text layer, signatures,
-metadata, the xref table.
+![The workspace: a thumbnail rail, the page canvas and one toolbar](guide/screenshots/feature/02-editor.png)
 
-## Posture (non-negotiable)
+## Install
 
-- One self-contained HTML file. No build step, no server, no account, ever.
-- No telemetry, analytics, or error reporting, ever. No PDF content persisted or
-  uploaded — except, under BYOK, the minimum slice to the user's *own* provider.
-- Redaction is **true content-stream removal**, never a black box over live text.
-- The AI sidecar is a **removable passenger** — pull it out and every operation
-  still works. The no-AI state is the ground floor.
-- **One core, three doors:** click (human UI) · call (`window.sheaf` agent face) ·
-  brief (Bench conductor) — all dispatch through the same operation registry.
+| | |
+|---|---|
+| **Browser** | Open **[sheaf.naklitechie.com](https://sheaf.naklitechie.com)**. Nothing to install. |
+| **NakliOS** | Open Sheaf from the desktop at **[naklios.dev](https://naklios.dev)**. |
+| **Your own host** | Serve `index.html`, `commands.json` and `engines/` from any static host, for example `python3 -m http.server`. |
 
-## Stack
+Open a PDF with the toolbar, `Cmd/Ctrl+O`, or a drag onto the page. Every edit stays in the browser's memory
+until you save, and `Cmd/Ctrl+Z` steps back through all of them. No config file, no account. Chromium browsers
+save in place; Firefox and Safari open and download.
 
-Vanilla JS · PDF.js (render/text-layer/search) · pdf-lib (default write engine) ·
-Tesseract.js (OCR) · pdfium-wasm (optional fidelity tier). All engines vendored
-same-origin, lazy-loaded on first use, version-pinned and SHA-256 verified.
+## Why
 
-Rides three suite primitives — `nakli-doc`, `nakli-creative-primitives`,
-`nakli-ai` — and, as tool 1 of 5, hardens them for the tools that follow.
+You have a contract to sign, a scan to shrink and a page to redact, and the free sites want the file on their
+server first. Sheaf does that work on your machine. The engines ship with the page, and with no AI configured it
+makes no outbound calls.
 
-## Architecture
+Redaction removes text from the content stream, and it warns you when it cannot guarantee removal under a box. The
+AI sidecar is optional: every operation works without it. A local Ollama or LM Studio is detected automatically,
+and a key of your own goes only to the provider you chose.
 
-One operation registry is the spine: every edit — page op, annotation, redaction,
-OCR, metadata — registers once and dispatches through one path, whether it's driven by
-the human UI (click), the agent face (`window.sheaf` / URL mode — off by default), or
-the Bench conductor (brief). The deterministic core gates everything; the AI sidecar is
-a removable passenger.
+## Drive it from a script or an assistant
 
-- `src/core/` — registry, runner (dispatch + op-log replay), single schema ingress,
-  the `nakli-doc` PDF adapter (pdf-lib write side + PDF.js render side), storage façade,
-  keyboard grammar, the `nakli-ai` sidecar, engine loader.
-- `src/ops/` — every operation (open, page ops, annotate, marks, text, forms, sign,
-  redact, OCR, convert, metadata).
-- `src/ui/` — the human face. `build/inline.mjs` bundles `src/` into a single
-  `index.html`; engines are vendored, SHA-pinned, and loaded same-origin from `/engines`.
+Every operation registers once in `src/core/registry.js` and runs through one runner, whichever door it came from.
+The operation log replays without Sheaf's UI and without any model.
 
-Run the tests with `npm test`; build with `npm run build`.
+- **Developer door:** turn on **Agent face** in Settings to get `window.sheaf` and `?op=<id>&p.<name>=<value>` URL
+  mode. Both are off by default, so a link cannot run an operation on your file.
+- **NakliOS door:** inside NakliOS, the desktop's voice assistant and Anvil call the commands in `commands.json`.
+  The desktop checks each caller's grant and asks you before a change. This door does not need the developer
+  setting, and no command saves a file, reads page text or opens a new document.
+
+## Commands
+
+```sh
+npm test                 # every headless suite
+npm run build            # bundle src/ into index.html and _headers
+node scripts/vendor-naklios-sdk.mjs --file src/index.html   # refresh the inlined NakliOS SDK
+```
+
+The NakliOS commands: `sheaf.operations.list`, `sheaf.document.read`, `sheaf.operation.run`, `sheaf.operation.undo`.
+
+## Verify it yourself
+
+```sh
+npm test
+npm run build && git diff --exit-code -- index.html _headers
+```
+
+The suites run the real runner and pdf-lib in Node. `test/m0-replay.mjs` is the core gate: it replays the whole
+operation log from the opened bytes and refuses a result whose fingerprint differs from the live document. The
+second line refuses a committed `index.html` that the sources do not reproduce. Operations that need a browser
+canvas (`convert.pageImage`, `ocr.*`, `compress.rasterize`) are outside these suites.
 
 ## License
 
-[GNU AGPL-3.0](LICENSE) — derivatives and hosted forks stay open.
+[GNU AGPL-3.0](LICENSE). Derivatives and hosted forks stay open.
 
----
-
-Part of [NakliTechie](https://naklitechie.com).
+[Feature guide](guide/index.html) · Part of [NakliTechie](https://naklitechie.com)
