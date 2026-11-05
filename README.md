@@ -49,7 +49,7 @@ The operation log replays without Sheaf's UI and without any model.
 - **NakliOS door:** inside NakliOS, the desktop's voice assistant and Anvil call the commands in `commands.json`.
   The desktop checks each caller's grant, asks you once before a change, and asks you every time before one that
   removes, replaces or hides content. This door does not need the developer setting, and no command saves a file,
-  reads page text or opens a new document.
+  reads page text or opens a new document. To open a PDF from the NakliOS Files app, use **Open in Sheaf**.
 
 ## Commands
 

@@ -7,7 +7,7 @@ import { icon } from './icons.js';
 import { on, emit } from '../core/events.js';
 import { state } from '../core/state.js';
 import * as storage from '../core/storage.js';
-import { openPdf, newBlank, openBytes, openFolder, confirmDiscardIfDirty } from './fileops.js';
+import { openPdf, newBlank, openBytes, openFolder, openIncoming, confirmDiscardIfDirty } from './fileops.js';
 import { hasFSA } from '../core/storage.js';
 import { ensurePdfLib } from './engines-ui.js';
 import { toast } from './toast.js';
@@ -87,12 +87,6 @@ function wireGlobalDrop() {
     e.preventDefault(); dropEl()?.classList.remove('over');
     const file = [...(e.dataTransfer?.files || [])].find(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
     if (!file) return;
-    if (!await confirmDiscardIfDirty()) return;
-    try {
-      await ensurePdfLib();
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      await openBytes(bytes, file.name, null);
-      toast(`Opened ${file.name}`, 'ok');
-    } catch (err) { emit('error', { message: 'Could not open dropped file', detail: err.message }); }
+    await openIncoming(async () => ({ bytes: new Uint8Array(await file.arrayBuffer()), name: file.name }), 'Could not open dropped file');
   });
 }

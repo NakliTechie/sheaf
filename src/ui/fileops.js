@@ -56,6 +56,23 @@ export async function openBytes(bytes, name = 'document.pdf', handle = null) {
   emit('session:changed', null);
 }
 
+// A file that arrives from outside: a drop, or a send from NakliOS. The guard runs first,
+// so unsaved work is never replaced silently, and `load` runs only if the person agrees.
+// `load` answers { bytes, name }. Returns whether the document opened.
+export async function openIncoming(load, failure, confirm = confirmDiscardIfDirty) {
+  try {
+    if (!await confirm()) return false;
+    await ensurePdfLib();
+    const { bytes, name } = await load();
+    await openBytes(bytes, name, null);
+    toast(`Opened ${name}`, 'ok');
+    return true;
+  } catch (err) {
+    emit('error', { message: failure, detail: err.message });
+    return false;
+  }
+}
+
 export async function newBlank() {
   if (!await confirmDiscardIfDirty()) return;
   await ensurePdfLib();

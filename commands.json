@@ -1,4 +1,5 @@
 {
+  "accepts": [{ "action": "import", "label": "Open in Sheaf", "extensions": [".pdf"] }],
   "commands": [
     {
       "name": "operations.list",

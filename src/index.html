@@ -41,7 +41,7 @@
   <!-- The NakliOS SDK: no-ops standalone. Refreshed by scripts/vendor-naklios-sdk.mjs. -->
   <script>
 /* oxlint-disable -- vendored here, and the built index.html is generated: lint the sources, as the house config does for vendor/ and dist/. */
-/* naklios-sdk:begin ver=2 sha256=c8d83eef0c0c141840516e03da98e6c1139ed40bb3556f4aa4699f475fa5e737 — DO NOT EDIT until :end; run `node scripts/vendor-naklios-sdk.mjs` */
+/* naklios-sdk:begin ver=2 sha256=9341ae0c9d1d66539c11ab98039c2d79d82751f08f57845c16c5bbff914d8d3c — DO NOT EDIT until :end; run `node scripts/vendor-naklios-sdk.mjs` */
 /*!
  * naklios.js — cooperative SDK for apps hosted inside NakliOS (Immersive mode)
  *
@@ -887,6 +887,14 @@
         return rpc('naklios:commands:call', { name: String(name || ''), input: input || {} }, COMMAND_CALL_TIMEOUT_MS);
       },
     },
+    experimental_widgets: {
+      // One snapshot for a widget the app declares in commands.json; `null` removes the card. `persist: false`
+      // keeps it in memory only, for data the desktop must not copy to disk (Crate). Standalone: does nothing.
+      update: function (id, data, options) {
+        if (!inNakliOS) return false;
+        return send('naklios:widgets:update', { id: String(id || ''), data: data === undefined ? null : data, persist: !options || options.persist !== false }) !== false;
+      },
+    },
     experimental_skills: {
       list: function () {
         if (!inNakliOS) return Promise.resolve([]);
@@ -983,6 +991,19 @@
         return rpc('naklios:file:openWith', fsPayload({
           appId: String(appId || ''),
           path: String(path || ''),
+        }));
+      },
+      // Which apps declared they take this file (`accepts` in their commands.json), as `{ appId, name, action, label }`.
+      experimental_targets: function (path) {
+        if (!inNakliOS) return Promise.resolve([]);
+        return rpc('naklios:file:targets', { path: String(path || '') });
+      },
+      // Send copies of app-relative files to an app that imports them. The target gets one read-only token per file;
+      // `read(token)` answers `{ bytes, name, path, type, sourceAppId, backend }`.
+      experimental_sendTo: function (appId, paths) {
+        return rpc('naklios:file:sendTo', fsPayload({
+          appId: String(appId || ''),
+          paths: (Array.isArray(paths) ? paths : [paths]).map(String),
         }));
       },
       onOpen: function (cb) {
