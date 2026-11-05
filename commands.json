@@ -1,0 +1,72 @@
+{
+  "commands": [
+    {
+      "name": "operations.list",
+      "description": "List what the Sheaf PDF editor can change in the open PDF, e.g. \"what can you do to this PDF\".",
+      "scope": "read",
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "name": "document.read",
+      "description": "Say which PDF is open in the Sheaf PDF editor and how many pages it has, e.g. \"how many pages does my PDF have\".",
+      "scope": "read",
+      "input": { "type": "object", "properties": {} }
+    },
+    {
+      "name": "operation.run",
+      "description": "Change the PDF open in the Sheaf PDF editor, e.g. \"rotate the first page of my PDF\", and the file on disk stays as it was until the person saves.",
+      "scope": "write",
+      "input": {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "description": "The operation id from operations.list, e.g. \"pages.rotate\"",
+            "enum": [
+              "pages.rotate",
+              "pages.crop",
+              "pages.delete",
+              "pages.reorder",
+              "pages.orient",
+              "pages.keepRange",
+              "pages.addMargin",
+              "pages.nUp",
+              "pages.reverse",
+              "pages.duplicate",
+              "pages.extract",
+              "pages.insertBlank",
+              "pages.scale",
+              "metadata.set",
+              "marks.watermark",
+              "marks.pageNumbers",
+              "marks.bates",
+              "marks.text",
+              "marks.border",
+              "annotate.highlight",
+              "annotate.rect",
+              "annotate.line",
+              "annotate.pencil",
+              "annotate.textbox",
+              "forms.fill",
+              "forms.flatten",
+              "text.whiteout",
+              "redact.region",
+              "sign.place"
+            ]
+          },
+          "params": {
+            "type": "object",
+            "description": "The operation's params from operations.list, e.g. {\"pages\":[0],\"angle\":90}. Page numbers count from 0, so the first page is 0"
+          }
+        },
+        "required": ["op"]
+      }
+    },
+    {
+      "name": "operation.undo",
+      "description": "Undo the last change to the PDF open in the Sheaf PDF editor, e.g. \"undo that change to my PDF\".",
+      "scope": "write",
+      "input": { "type": "object", "properties": {} }
+    }
+  ]
+}

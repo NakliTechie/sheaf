@@ -9,6 +9,7 @@ import { registerOps } from './ops/index.js';
 import { keyboard } from './core/keyboard.js';
 import { undo, redo } from './core/runner.js';
 import { refreshAgentFace, handleUrlMode } from './core/agent.js';
+import { registerCommands } from './core/commands.js';
 import { init as initAi } from './core/ai.js';
 
 import { installErrorNet } from './ui/toast.js';
@@ -102,6 +103,7 @@ function boot() {
   initRecovery();
   refreshAgentFace();
   handleUrlMode();
+  registerCommands();
   // Detect the AI ladder in the background (probes localhost; quiet if nothing's there).
   // The tool is fully usable before/without this — the no-AI ground floor.
   initAi().catch(() => {});

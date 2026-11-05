@@ -12,6 +12,7 @@ node_modules
 src
 test
 build
+scripts
 plan
 guide
 *.log

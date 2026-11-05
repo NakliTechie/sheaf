@@ -1,0 +1,42 @@
+# Keeps Sheaf's inlined naklios.js SDK fresh against https://naklios.dev/sdk/naklios.js,
+# from NakliOS's docs/vendor-sdk.workflow.yml. Sheaf differs from that template in one way:
+# index.html is a build output, so the splice goes into src/index.html, the build
+# follows, and the suite runs here because a GITHUB_TOKEN push starts no workflows.
+name: Vendor naklios SDK
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 5 * * *' # daily; canonical changes are rare
+
+permissions:
+  contents: write
+
+jobs:
+  vendor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Re-splice canonical SDK into the source template
+        run: node scripts/vendor-naklios-sdk.mjs --file src/index.html
+      - name: Verify the splice before committing it
+        run: node scripts/vendor-naklios-sdk.mjs --file src/index.html --check
+      - name: Build
+        run: node build/inline.mjs
+      - name: Test the refreshed app
+        run: npm test
+      - name: Commit the refreshed SDK
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- src/index.html index.html; then
+            echo "vendored SDK already matches canonical — nothing to commit"
+            exit 0
+          fi
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- src/index.html index.html
+          git commit -m 'chore: refresh vendored naklios SDK from canonical'
+          git push

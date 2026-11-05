@@ -2,6 +2,7 @@
 // the SAME runner.dispatch as the human UI. One core, two doors (the third, the
 // Bench conductor, drives this same surface). Off by default — opt-in developer
 // setting — so a random page load or link can never drive someone's document.
+// commands.js is the host's door onto this same surface, gated by the host's Grant.
 //
 // What the agent face may see: the operation catalog and minimal document context
 // (page geometry, metadata, field list) — NEVER page content, extracted text, or
@@ -40,7 +41,7 @@ function docContext() {
   };
 }
 
-function buildApi() {
+export function buildApi() {
   return Object.freeze({
     version: 1,
     // The vocabulary: agent-callable ops, their params, descriptions.

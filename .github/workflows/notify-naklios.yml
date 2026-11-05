@@ -1,7 +1,7 @@
 name: Notify NakliOS to re-mirror
 
-# Sheaf is mirrored same-origin under naklios.dev/apps/sheaf/ (index.html + the
-# vendored /engines). When a distributable file changes here, ask nakli-dev to
+# Sheaf is mirrored same-origin under naklios.dev/apps/sheaf/ (index.html, commands.json
+# and the vendored /engines). When a distributable file changes here, ask nakli-dev to
 # re-sync the mirror. Without the optional NAKLIOS_DISPATCH_TOKEN secret this is a
 # no-op and nakli-dev's six-hour scheduled sync discovers the change instead.
 on:
@@ -9,6 +9,7 @@ on:
     branches: [main]
     paths:
       - 'index.html'
+      - 'commands.json'
       - 'engines/**'
 
 jobs:
