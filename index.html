@@ -404,7 +404,7 @@ button { font-family: inherit; font-size: inherit; color: inherit; }
   <!-- The NakliOS SDK: no-ops standalone. Refreshed by scripts/vendor-naklios-sdk.mjs. -->
   <script>
 /* oxlint-disable -- vendored here, and the built index.html is generated: lint the sources, as the house config does for vendor/ and dist/. */
-/* naklios-sdk:begin ver=2 sha256=967e036b50df81c004a86a878c2a596e175b758806fe8d98d89cf606c091756e — DO NOT EDIT until :end; run `node scripts/vendor-naklios-sdk.mjs` */
+/* naklios-sdk:begin ver=2 sha256=f222a9090861ae9dd63ed97419646573499b62ec91a8d6012bf07b0fb47d39c7 — DO NOT EDIT until :end; run `node scripts/vendor-naklios-sdk.mjs` */
 /*!
  * naklios.js — cooperative SDK for apps hosted inside NakliOS (Immersive mode)
  *
@@ -1667,7 +1667,9 @@ button { font-family: inherit; font-size: inherit; color: inherit; }
       // token({ provider, scopes }) -> { accessToken, expiresAt, scopes }. Call it from a click handler: Google's
       // window needs the person's click, and without one the host shows a "Continue to Google" dialog first.
       // Errors carry .code: ENOAUTH (not available), ENOGRANT (person declined), EDENIED (Google or the person
-      // refused a scope), ECANCELLED, EINVAL (unknown provider or scope), EGOOGLE.
+      // refused a scope), ECANCELLED, EINVAL (unknown provider or scope), EGOOGLE, ENOSIGNIN (prompt:false and no
+      // token held). prompt:false asks only for a token the host already holds and never opens a window: use it in
+      // command handlers and background checks.
       token: function (opts) {
         opts = opts || {};
         var provider = opts.provider || 'google';
@@ -1677,7 +1679,9 @@ button { font-family: inherit; font-size: inherit; color: inherit; }
           return Promise.reject(e);
         }
         // The person may take minutes on Google's screen; the host also stops this clock while its prompt is open.
-        return rpc('naklios:auth:token', { provider: provider, scopes: opts.scopes || [] }, 300000);
+        var payload = { provider: provider, scopes: opts.scopes || [] };
+        if (opts.prompt === false) payload.prompt = false;
+        return rpc('naklios:auth:token', payload, 300000);
       },
       // Drop the tokens this app holds for the provider (a token only this app held is revoked at the provider).
       revoke: function (provider) {
